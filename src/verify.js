@@ -108,8 +108,8 @@ function verifyFile(filePath, cwd) {
 
     if (inCodeBlock) continue;
 
-    // Strip inline code spans (single or multi-backtick) so literal `{{...}}` or `file#L1` examples don't false-trigger
-    const lineWithoutInlineCode = rawLine.replace(/`+[^`]*`+/g, '');
+    // Strip inline code spans (supporting paired N-backtick spans like ``code with ` inside``) so literal examples don't false-trigger
+    const lineWithoutInlineCode = rawLine.replace(/(`+)([\s\S]*?)\1/g, '');
 
     // 1. Check unfilled placeholders {{...}}
     const placeholderRegex = /\{\{[^{}\r\n]+\}\}/g;

@@ -100,16 +100,22 @@ function runUpgrade({ cwd = process.cwd(), flags = {} } = {}) {
     fs.writeFileSync(agentsPath, newAgentsContent, 'utf8');
   }
 
-  // 2. Update .<targetCli>/skills/<targetCli>/SKILL.md
+  // 2. Update .<targetCli>/skills/<targetCli>/SKILL.md while preserving user-appended custom sections
   const skillDir = path.join(cwd, targetHiddenDir, 'skills', targetCli);
   const skillRel = `${targetHiddenDir}/skills/${targetCli}/SKILL.md`;
   const skillPath = path.join(skillDir, 'SKILL.md');
+  const existingSkillRaw = fs.existsSync(skillPath) ? fs.readFileSync(skillPath, 'utf8') : null;
+  const baseSkillContent = renderSkillMd({ lang, mode, cliName: targetCli, pkgName: targetPkg });
+  let customSkillSuffix = '';
+  if (existingSkillRaw && !flags.force && existingSkillRaw.startsWith(baseSkillContent) && existingSkillRaw.length > baseSkillContent.length) {
+    customSkillSuffix = existingSkillRaw.slice(baseSkillContent.length);
+  }
   actions.push({ type: 'update', file: skillRel });
   if (!isDryRun) {
     ensureDir(skillDir);
     fs.writeFileSync(
       skillPath,
-      renderSkillMd({ lang, mode, cliName: targetCli, pkgName: targetPkg }),
+      baseSkillContent + customSkillSuffix,
       'utf8'
     );
   }

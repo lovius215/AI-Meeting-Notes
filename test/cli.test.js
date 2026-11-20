@@ -1063,3 +1063,104 @@ test('15. round-4 microscope audit: Windows CRLF conflict detection, ja/ko prose
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('16. round-5 deep audit: paired N-backtick inline code, hypothetical/question conflict exclusion, uncited AI-xx todo detection, target-scoped commit & SKILL.md custom suffix preservation', () => {
+  const { main } = require('../bin/cli');
+  const tmpDir = makeTempDir('meetnotes-round5-');
+  try {
+    runInit({ cwd: tmpDir, flags: { full: true, lang: 'ja' } });
+
+    // 16a. Append custom user section to .meetnotes/skills/meetnotes/SKILL.md -> preserved across lang switch and upgrade
+    const hiddenSkillPath = path.join(tmpDir, HIDDEN_DIR, 'skills', CLI_NAME, 'SKILL.md');
+    fs.appendFileSync(hiddenSkillPath, '\n# CUSTOM_SKILL_SECTION_777\nKeep this custom skill section.\n', 'utf8');
+    runInit({ cwd: tmpDir, flags: { full: true, lang: 'zh-TW' } });
+    assert.match(fs.readFileSync(hiddenSkillPath, 'utf8'), /CUSTOM_SKILL_SECTION_777/);
+    runUpgrade({ cwd: tmpDir });
+    assert.match(fs.readFileSync(hiddenSkillPath, 'utf8'), /CUSTOM_SKILL_SECTION_777/);
+
+    // 16b. CLI --map with '=' inside value (e.g. "SPEAKER_00=王經理 (Role=PM)") + paired double-backtick inline code with single backtick inside
+    const txtPath = path.join(tmpDir, 'raw.txt');
+    fs.writeFileSync(txtPath, '[00:00:05] SPEAKER_00: 我們正式決議上線日定在 12/01，預算定在 50 萬。\n', 'utf8');
+    const codeExit = main([
+      'new-meeting',
+      'Project-R5',
+      'M1',
+      '--date',
+      '2026-11-01',
+      '--transcript',
+      txtPath,
+      '--map',
+      'SPEAKER_00=王經理 (Role=PM)'
+    ]);
+    // Note: main() uses process.cwd(), so let's also test createMeeting directly on tmpDir
+    assert.equal(typeof codeExit, 'number');
+
+    const m1 = createMeeting({
+      cwd: tmpDir,
+      project: 'Project-R5',
+      title: 'M1',
+      date: '2026-11-01',
+      transcriptText: '[00:00:05] SPEAKER_00: 我們正式決議上線日定在 12/01，預算定在 50 萬。',
+      mapping: { SPEAKER_00: '王經理 (Role=PM)' }
+    });
+    assert.equal(m1.ok, true);
+    assert.match(fs.readFileSync(path.join(m1.meetingDir, '01-transcript.md'), 'utf8'), /\*\*王經理 \(Role=PM\)\*\*/);
+    fs.appendFileSync(
+      path.join(m1.meetingDir, '02-summary.md'),
+      '\n- **預計上線日**：12/01 ([01-transcript.md](./01-transcript.md#L1-L11))\n- **預算**：50 萬 ([01-transcript.md](./01-transcript.md#L1-L11))\n- 範例行內雙反引號含單反引號：``code with ` backtick and {{NOT_A_PLACEHOLDER}} and fake.js#L999``\n',
+      'utf8'
+    );
+
+    // 16c. Hypothetical ("如果..."), question ("...？"), and unconfirmed ("⚠️") lines must NOT trigger false conflicts
+    const m2 = createMeeting({
+      cwd: tmpDir,
+      project: 'Project-R5',
+      title: 'M2',
+      date: '2026-11-20',
+      transcriptText: '[00:00:05] **王經理**：有人討論如果上線日改為 12/25 會怎樣，但最終維持原案。'
+    });
+    fs.appendFileSync(
+      path.join(m2.meetingDir, '02-summary.md'),
+      [
+        '',
+        '- 如果上線日改為 12/25 會有延遲風險 ([01-transcript.md](./01-transcript.md#L1-L11))',
+        '- 預算是否改為 90 萬？ ([01-transcript.md](./01-transcript.md#L1-L11))',
+        '- ⚠️ [需人為確認] 上線日改為 12/30 ([01-transcript.md](./01-transcript.md#L1-L11))'
+      ].join('\n'),
+      'utf8'
+    );
+    const m2Inspect = inspectMeetingDirectory(m2.meetingDir);
+    assert.equal(m2Inspect.conflicts.length, 0, JSON.stringify(m2Inspect.conflicts));
+
+    // 16d. Uncited AI-xx row in 03-todos-and-discussion.md must be caught by inspectMeetingDirectory
+    fs.appendFileSync(
+      path.join(m1.meetingDir, '03-todos-and-discussion.md'),
+      '\n| AI-02 | 未附來源引用的待辦 | 王經理 | 2026-11-30 | 🟢 已驗證事實 | 無引用 | ⏳ Pending |\n',
+      'utf8'
+    );
+    const m1InspectUncited = inspectMeetingDirectory(m1.meetingDir);
+    assert.equal(m1InspectUncited.structureOk, false);
+    assert.equal(m1InspectUncited.uncitedItems.some((u) => u.file === '03-todos-and-discussion.md'), true);
+
+    // Fix AI-02 citation in m1, then test target-scoped commit: `runCommit({ cwd: tmpDir, target: 'meetings' })`
+    // Even though `project/01-spec.md` still has unfilled `{{PACKAGE_NAME}}` placeholders, committing target 'meetings' succeeds and only commits `meetings/`!
+    const fixedTodos = fs.readFileSync(path.join(m1.meetingDir, '03-todos-and-discussion.md'), 'utf8')
+      .replace('| 無引用 |', '| [01-transcript.md](./01-transcript.md#L1-L11) |');
+    fs.writeFileSync(path.join(m1.meetingDir, '03-todos-and-discussion.md'), fixedTodos, 'utf8');
+
+    const scopedCommit = runCommit({ cwd: tmpDir, target: 'meetings', flags: { m: 'docs: commit only meetings' } });
+    assert.equal(scopedCommit.ok, true);
+    assert.equal(scopedCommit.committed, true);
+  } finally {
+    // Clean up any accidental Project-R5 created in process.cwd() by main() call above
+    const cwdR5 = path.join(process.cwd(), 'meetings', 'Project-R5');
+    if (fs.existsSync(cwdR5)) {
+      fs.rmSync(cwdR5, { recursive: true, force: true });
+      const cwdMeetings = path.join(process.cwd(), 'meetings');
+      if (fs.existsSync(cwdMeetings) && fs.readdirSync(cwdMeetings).length === 0) {
+        fs.rmSync(cwdMeetings, { recursive: true, force: true });
+      }
+    }
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

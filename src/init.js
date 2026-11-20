@@ -139,14 +139,27 @@ function runInit({ cwd = process.cwd(), flags = {} } = {}) {
     }
   }
 
-  // 3. Create .<cli>/skills/<cli>/SKILL.md (protected unless --force or --lang/--mode changed)
+  // 3. Create .<cli>/skills/<cli>/SKILL.md (protected unless --force or --lang/--mode changed; preserves user-appended custom sections)
   const skillDir = path.join(cwd, HIDDEN_DIR, 'skills', CLI_NAME);
   ensureDir(skillDir);
   const skillPath = path.join(skillDir, 'SKILL.md');
   if (!fs.existsSync(skillPath) || shouldRefreshTemplates) {
+    const existingSkillRaw = fs.existsSync(skillPath) ? fs.readFileSync(skillPath, 'utf8') : null;
+    let customSkillSuffix = '';
+    if (existingSkillRaw && existingCfg && !flags.force) {
+      const oldDefaultSkill = renderSkillMd({
+        lang: existingCfg.lang,
+        mode: existingCfg.mode,
+        cliName: CLI_NAME,
+        pkgName: PACKAGE_NAME
+      });
+      if (existingSkillRaw.startsWith(oldDefaultSkill) && existingSkillRaw.length > oldDefaultSkill.length) {
+        customSkillSuffix = existingSkillRaw.slice(oldDefaultSkill.length);
+      }
+    }
     fs.writeFileSync(
       skillPath,
-      renderSkillMd({ lang, mode, cliName: CLI_NAME, pkgName: PACKAGE_NAME }),
+      renderSkillMd({ lang, mode, cliName: CLI_NAME, pkgName: PACKAGE_NAME }) + customSkillSuffix,
       'utf8'
     );
   }

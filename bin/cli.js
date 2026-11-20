@@ -142,8 +142,12 @@ function main(argv = process.argv.slice(2)) {
       const mapping = {};
       if (typeof flags.map === 'string') {
         for (const pair of flags.map.split(',')) {
-          const [k, v] = pair.split('=');
-          if (k && v) mapping[k.trim()] = v.trim();
+          const eqIdx = pair.indexOf('=');
+          if (eqIdx > 0) {
+            const k = pair.slice(0, eqIdx).trim();
+            const v = pair.slice(eqIdx + 1).trim();
+            if (k && v) mapping[k] = v;
+          }
         }
       }
       const res = createMeeting({

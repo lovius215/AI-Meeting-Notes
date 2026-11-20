@@ -129,17 +129,30 @@ function runCommit({ cwd = process.cwd(), target = null, flags = {} } = {}) {
   const filesToStage = [];
 
   if (statusOut.ok && statusOut.stdout) {
+    const targetPrefix = target
+      ? path.relative(cwd, path.isAbsolute(target) ? target : path.join(cwd, target)).replace(/\\/g, '/')
+      : null;
+
     for (const line of statusOut.stdout.split(/\r?\n/)) {
       if (!line.trim()) continue;
       const xy = line.slice(0, 2);
       const rawEntry = line.slice(3).trim().replace(/^"(.*)"$/, '$1');
       const rawPath = rawEntry.includes(' -> ') ? rawEntry.split(' -> ').pop().trim() : rawEntry;
+      const normalizedRel = rawPath.replace(/\\/g, '/');
+
       if (isSensitiveFile(rawPath)) {
         excludedSensitive.push(rawPath);
         if (xy !== '!!') {
           runGit(['reset', 'HEAD', '--', rawPath], cwd);
         }
       } else if (xy !== '!!') {
+        if (targetPrefix && !normalizedRel.startsWith('..')) {
+          const matchesTarget =
+            normalizedRel === targetPrefix ||
+            normalizedRel.startsWith(`${targetPrefix}/`) ||
+            (indexUpdated && normalizedRel === 'project/index.md');
+          if (!matchesTarget) continue;
+        }
         filesToStage.push(rawPath);
       }
     }

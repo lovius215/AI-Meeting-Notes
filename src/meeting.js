@@ -540,6 +540,14 @@ function extractKeyFacts(mdContent, sourceLabel) {
     const rawLine = lines[i];
     const lineNum = i + 1;
 
+    // Skip hypothetical questions, unconfirmed ⚠️ lines, or conditional statements so they don't trigger false decision conflicts
+    if (
+      /⚠️|[\?？]\s*$/.test(rawLine) ||
+      /^\s*(?:[-*]\s*)?(?:如果|若|假設|假设|討論是否|讨论是否|未決議|未决议|if\s+|whether\s+)/i.test(rawLine)
+    ) {
+      continue;
+    }
+
     // 1. Structured `- **Key**: Value` (strip trailing parenthetical source/line citations before comparison)
     const m = rawLine.match(factRegex);
     if (m) {
@@ -628,6 +636,15 @@ function inspectMeetingDirectory(meetingDir) {
         });
       }
       if (fname === '02-summary.md' && /^\s*-\s+(?:🟢|🟡|🔴|\*\*決議)/.test(line)) {
+        if (!/#L\d+/.test(line)) {
+          uncitedItems.push({
+            file: fname,
+            line: i + 1,
+            text: line.trim()
+          });
+        }
+      }
+      if (fname === '03-todos-and-discussion.md' && /^\s*\|\s*AI-\d+\s*\|/.test(line)) {
         if (!/#L\d+/.test(line)) {
           uncitedItems.push({
             file: fname,
