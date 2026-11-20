@@ -14,13 +14,13 @@
     "cursor",
     "antigravity"
   ],
-  "homepage": "https://github.com/loviusc/ai-meeting-notes#readme",
+  "homepage": "https://github.com/lovius215/AI-Meeting-Notes#readme",
   "bugs": {
-    "url": "https://github.com/loviusc/ai-meeting-notes/issues"
+    "url": "https://github.com/lovius215/AI-Meeting-Notes/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/loviusc/ai-meeting-notes.git"
+    "url": "git+https://github.com/lovius215/AI-Meeting-Notes.git"
   },
   "license": "MIT",
   "author": "loviusc",
