@@ -114,6 +114,7 @@ After running `meetnotes init`, end users **never need to type CLI commands** or
 | `meetnotes upgrade [--dry-run]` | Refresh built-in rule templates (preserves locked language, `<claude-mem-context>` & custom sections appended at end of file; saves `.bak` backup if modified in-place) |
 | `meetnotes status` / `check` / `doctor` | Display progress statistics, file integrity checks, and environment diagnostics |
 | `meetnotes new-meeting <project> <title> --transcript <file> [--media <file>] [--empty] [--force] [--force-all]` | Deterministically create meeting folder, compute media `SHA-256`, and run 0-Token speaker batch replacement (`--empty` creates unverified `⚠️` skeleton; `--force` only overwrites `01` with `.bak` backup; `--force-all` overwrites `01~03` with `.bak`) |
+| `meetnotes sync-hash [meetingDir] [--yes]` | Sync `transcript-sha256` in `02-summary.md` & `03-todos-and-discussion.md` after minor manual transcript typo edits without overwriting prose (requires `--yes` if >5% changed or citations are broken) |
 | `meetnotes inspect <meetingDir>` | Run Post-Creation Inspection Rule (detects cross-meeting conflicts on any `- **Key**: Value` field and natural-language **Launch Date / Budget / Owner**; exits non-zero on `🚨` or `⚡`) |
 | `meetnotes deliverable --meeting <dir> --template <file> [--out <file>]` | Generate template deliverable in `deliverables/`, flagging missing fields with `⚠️ [會議未提及 - 需人工補填]` |
 

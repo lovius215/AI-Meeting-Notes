@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { readConfig } = require('./utils');
+const { readConfig, computeTranscriptHash } = require('./utils');
 const { t } = require('./i18n');
 
 function collectMarkdownFilesRecursive(dirPath, { skipTemplates = true } = {}) {
@@ -130,16 +130,20 @@ function verifyFile(filePath, cwd) {
     // Strip remote HTTP/HTTPS URLs first (including balanced parentheses like Wikipedia URLs) so remote permalinks never trigger local file errors
     const lineWithoutRemoteUrls = lineWithoutInlineCode.replace(/https?:\/\/(?:[^\s()[\]<>]+|\([^\s()[\]<>]+\))+/gi, '');
 
-    // Support Unicode/CJK folder and file names AND balanced parentheses in paths (e.g. 2026-11-20_週會_(上午場)/01-transcript.md#L1-L5)
-    // while still stopping at Markdown link delimiters `(...)` and ASCII/CJK punctuation
+    // Support:
+    //   1) Angle-bracketed Markdown links with spaces or nested parens: <b (c)/x.md#L1-L2>
+    //   2) Standard Unicode/CJK paths with balanced single-level parens: 2026-11-20_週會_(上午場)/01-transcript.md#L1-L5
     const pathAtom = `(?:[^\\s()\\[\\]<>'"\`#（）：，。；、！？「」『』【】]|\\([^\\s()\\[\\]<>'"\`#（）：，。；、！？「」『』【】]+\\))`;
-    const refRegex = new RegExp(`(?:file:\\/\\/)?(${pathAtom}+?\\.[A-Za-z0-9]+)#L(\\d+)(?:-L?(\\d+))?`, 'g');
+    const refRegex = new RegExp(
+      `<(?:file:\\/\\/)?([^<>\\r\\n#]+?\\.[A-Za-z0-9]+)#L(\\d+)(?:-L?(\\d+))?>|(?:file:\\/\\/)?(${pathAtom}+?\\.[A-Za-z0-9]+)#L(\\d+)(?:-L?(\\d+))?`,
+      'g'
+    );
     let rMatch;
     while ((rMatch = refRegex.exec(lineWithoutRemoteUrls)) !== null) {
       const fullRef = rMatch[0];
-      const refPathStr = rMatch[1];
-      const startLine = parseInt(rMatch[2], 10);
-      const endLine = rMatch[3] ? parseInt(rMatch[3], 10) : startLine;
+      const refPathStr = rMatch[1] || rMatch[4];
+      const startLine = parseInt(rMatch[2] || rMatch[5], 10);
+      const endLine = (rMatch[3] || rMatch[6]) ? parseInt(rMatch[3] || rMatch[6], 10) : startLine;
 
       if (/^(?:https?|ftp|mailto):/i.test(fullRef) || /^(?:https?|ftp|mailto):/i.test(refPathStr)) {
         continue;
@@ -212,11 +216,10 @@ function verifyFile(filePath, cwd) {
     const hashMatch = content.match(/transcript-sha256:\s*([0-9a-f]{8,64})/i);
     const siblingTranscript = path.join(path.dirname(filePath), '01-transcript.md');
     if (hashMatch && fs.existsSync(siblingTranscript)) {
-      const actualHash = crypto
-        .createHash('sha256')
-        .update(fs.readFileSync(siblingTranscript, 'utf8'))
-        .digest('hex')
-        .slice(0, hashMatch[1].length);
+      const actualHash = computeTranscriptHash(
+        fs.readFileSync(siblingTranscript, 'utf8'),
+        hashMatch[1].length
+      );
       if (actualHash !== hashMatch[1]) {
         issues.push({
           type: 'stale_transcript',

@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawnSync } = require('node:child_process');
-const { ensureDir, getLocalDateString, saveSafeBackup } = require('./utils');
+const { ensureDir, getLocalDateString, saveSafeBackup, computeTranscriptHash, runGit } = require('./utils');
 const { verifyFile } = require('./verify');
 
 let meetingCreationSeq = 0;
@@ -557,7 +557,7 @@ function createMeeting({
   const transcriptLines = [...headerLines, ...mapped.lines];
   const transcriptTotalLines = transcriptLines.length;
   const transcriptMd = transcriptLines.join('\n') + '\n';
-  const transcriptSha256 = crypto.createHash('sha256').update(transcriptMd).digest('hex').slice(0, 16);
+  const transcriptSha256 = computeTranscriptHash(transcriptMd);
   const createdAtIso = `${new Date().toISOString()}-${String(++meetingCreationSeq).padStart(6, '0')}`;
   const metaComment = `<!-- meeting-date: ${cleanDate} | created-at: ${createdAtIso} | transcript-sha256: ${transcriptSha256} -->`;
 
@@ -1071,7 +1071,7 @@ function inspectMeetingDirectory(meetingDir) {
 
   const transcriptPath = path.join(meetingDir, '01-transcript.md');
   const currentTranscriptHash = fs.existsSync(transcriptPath)
-    ? crypto.createHash('sha256').update(fs.readFileSync(transcriptPath, 'utf8')).digest('hex').slice(0, 16)
+    ? computeTranscriptHash(fs.readFileSync(transcriptPath, 'utf8'))
     : null;
 
   for (const fname of requiredFiles) {
@@ -1208,12 +1208,56 @@ function inspectMeetingDirectory(meetingDir) {
   };
 }
 
+function computeLineChangeRatio(oldText, newText) {
+  const oldLines = String(oldText || '').replace(/\r\n/g, '\n').replace(/\n$/, '').split('\n');
+  const newLines = String(newText || '').replace(/\r\n/g, '\n').replace(/\n$/, '').split('\n');
+  const maxLen = Math.max(oldLines.length, newLines.length, 1);
+  const oldCounts = new Map();
+  for (const l of oldLines) {
+    oldCounts.set(l, (oldCounts.get(l) || 0) + 1);
+  }
+  let matched = 0;
+  for (const l of newLines) {
+    const c = oldCounts.get(l) || 0;
+    if (c > 0) {
+      matched++;
+      oldCounts.set(l, c - 1);
+    }
+  }
+  return Math.max(0, Math.round((1 - matched / maxLen) * 1000) / 1000);
+}
+
+function findBaselineTranscriptText(transcriptPath) {
+  const dir = path.dirname(transcriptPath);
+  const base = path.basename(transcriptPath);
+  const primaryBak = path.join(dir, `${base}.bak`);
+  if (fs.existsSync(primaryBak)) {
+    let latestBak = primaryBak;
+    let seq = 1;
+    while (fs.existsSync(path.join(dir, `${base}.bak.${seq}`))) {
+      latestBak = path.join(dir, `${base}.bak.${seq}`);
+      seq++;
+    }
+    return fs.readFileSync(latestBak, 'utf8');
+  }
+  const topRes = runGit(['rev-parse', '--show-toplevel'], dir);
+  if (topRes.ok && topRes.stdout) {
+    const relPath = path.relative(topRes.stdout, transcriptPath).split(path.sep).join('/');
+    const gitRes = runGit(['show', `HEAD:${relPath}`], topRes.stdout);
+    if (gitRes.ok && gitRes.stdout) {
+      return gitRes.stdout;
+    }
+  }
+  return null;
+}
+
 /**
  * Synchronize the recorded `transcript-sha256` metadata comment in downstream meeting files
  * (`02-summary.md`, `03-todos-and-discussion.md`) with the current `01-transcript.md` without
- * overwriting any human-edited prose. Useful after minor manual typo fixes in `01-transcript.md`.
+ * overwriting any human-edited prose. Blocks large (>5%) transcript rewrites or broken citations
+ * unless `yes: true` (`--yes`) is explicitly provided.
  */
-function syncTranscriptHash(meetingDir) {
+function syncTranscriptHash(meetingDir, { yes = false } = {}) {
   if (!meetingDir || !fs.existsSync(meetingDir) || !fs.statSync(meetingDir).isDirectory()) {
     return {
       ok: false,
@@ -1228,17 +1272,69 @@ function syncTranscriptHash(meetingDir) {
     };
   }
 
-  const currentHash = crypto
-    .createHash('sha256')
-    .update(fs.readFileSync(transcriptPath, 'utf8'))
-    .digest('hex')
-    .slice(0, 16);
+  const currentTranscriptText = fs.readFileSync(transcriptPath, 'utf8');
+  const currentHash = computeTranscriptHash(currentTranscriptText);
+
+  const projectDir = path.dirname(meetingDir);
+  const meetingsRoot = path.dirname(projectDir);
+  const workspaceRoot = path.basename(meetingsRoot) === 'meetings'
+    ? path.dirname(meetingsRoot)
+    : projectDir;
+
+  const downstreamNames = ['02-summary.md', '03-todos-and-discussion.md'];
+  const brokenCitations = [];
+  const affectedRefs = [];
+  const citeLineRegex = /01-transcript\.md#L\d+(?:-L?\d+)?/g;
+
+  for (const fname of downstreamNames) {
+    const fpath = path.join(meetingDir, fname);
+    if (!fs.existsSync(fpath) || !fs.statSync(fpath).isFile()) continue;
+
+    const issues = verifyFile(fpath, workspaceRoot).filter(
+      (i) => i.type === 'broken_lines' || i.type === 'broken_file'
+    );
+    brokenCitations.push(...issues);
+
+    const lines = fs.readFileSync(fpath, 'utf8').split(/\r?\n/);
+    for (let i = 0; i < lines.length; i++) {
+      const matches = lines[i].match(citeLineRegex);
+      if (matches) {
+        affectedRefs.push({ file: fname, line: i + 1, refs: matches });
+      }
+    }
+  }
+
+  const baselineText = findBaselineTranscriptText(transcriptPath);
+  const changeRatio = baselineText !== null ? computeLineChangeRatio(baselineText, currentTranscriptText) : null;
+
+  if (!yes && brokenCitations.length > 0) {
+    return {
+      ok: false,
+      reason: 'broken_citations',
+      changeRatio,
+      brokenCitations,
+      affectedRefs,
+      error: `Refusing to sync-hash: ${brokenCitations.length} citation(s) in downstream files point to invalid or out-of-range lines in 01-transcript.md. Fix citations first or pass --yes to override.`
+    };
+  }
+
+  if (!yes && changeRatio !== null && changeRatio > 0.05) {
+    const pct = Math.round(changeRatio * 100);
+    return {
+      ok: false,
+      reason: 'confirmation_required',
+      changeRatio,
+      brokenCitations,
+      affectedRefs,
+      error: `Refusing to sync-hash without --yes: 01-transcript.md changed by ~${pct}% (>5%), which may shift ${affectedRefs.length} #Lx-Ly citation(s). Review citations and re-run with --yes (or --force-all to regenerate).`
+    };
+  }
 
   const updatedFiles = [];
   const alreadySyncedFiles = [];
   const hashTokenRegex = /(transcript-sha256:\s*)([0-9a-f]{8,64})/i;
 
-  for (const fname of ['02-summary.md', '03-todos-and-discussion.md']) {
+  for (const fname of downstreamNames) {
     const fpath = path.join(meetingDir, fname);
     if (!fs.existsSync(fpath) || !fs.statSync(fpath).isFile()) continue;
 
@@ -1265,7 +1361,10 @@ function syncTranscriptHash(meetingDir) {
     meetingDir,
     transcriptSha256: currentHash,
     updatedFiles,
-    alreadySyncedFiles
+    alreadySyncedFiles,
+    changeRatio,
+    affectedRefs,
+    brokenCitations
   };
 }
 

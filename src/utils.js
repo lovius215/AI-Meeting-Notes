@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 const {
   CONFIG_FILENAME,
@@ -268,6 +269,11 @@ function parseCliArgs(argv) {
   return { positional, flags };
 }
 
+function computeTranscriptHash(text, length = 16) {
+  const normalized = String(text || '').replace(/\r\n/g, '\n');
+  return crypto.createHash('sha256').update(normalized, 'utf8').digest('hex').slice(0, length);
+}
+
 module.exports = {
   ensureDir,
   getLocalDateString,
@@ -277,6 +283,7 @@ module.exports = {
   extractClaudeMemContext,
   extractCustomTail,
   saveSafeBackup,
+  computeTranscriptHash,
   runGit,
   isSensitiveFile,
   parseCliArgs

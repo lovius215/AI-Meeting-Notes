@@ -56,8 +56,8 @@ Standard Commands:
   inspect [meetingDir]
       Runs the 7-dimension Post-Creation Inspection Rule (returns non-zero if files/citations are missing or if 🚨 Human-in-the-Loop / ⚡ Cross-Meeting Conflicts require review)
 
-  sync-hash [meetingDir]
-      Synchronizes transcript-sha256 in 02-summary.md and 03-todos-and-discussion.md with the current 01-transcript.md after manual edits without overwriting prose
+  sync-hash [meetingDir] [--yes]
+      Synchronizes transcript-sha256 in 02-summary.md and 03-todos-and-discussion.md with the current 01-transcript.md after manual edits without overwriting prose (requires --yes if >5% changed or citations are broken)
 
   deliverable --meeting <dir> --template <file> [--out <filename.md>] [--FIELD value] [--force]
       Generates a post-meeting deliverable from a template into deliverables/, flagging any unmentioned fields with ⚠️ [會議未提及 - 需人工補填] (refuses to overwrite existing file unless --force is passed, saving .bak backup)
@@ -173,7 +173,7 @@ function main(argv = process.argv.slice(2)) {
       }
       console.log(`✅ Meeting created: ${res.meetingDir}`);
       if (res.staleFiles && res.staleFiles.length > 0) {
-        console.warn(`⚠️ Warning: 01-transcript.md was updated, so downstream file(s) are now STALE and will be blocked by verify/inspect until synced: ${res.staleFiles.join(', ')} (or re-run with --force-all).`);
+        console.warn(`⚠️ Warning: 01-transcript.md was updated, so downstream file(s) are now STALE and will be blocked by verify/inspect until synced: ${res.staleFiles.join(', ')} (re-run with --force-all, or run \`${CLI_NAME} sync-hash ${res.meetingDir}\` after verifying citations).`);
       }
       return 0;
     }
@@ -191,9 +191,14 @@ function main(argv = process.argv.slice(2)) {
       const meetingDir = target
         ? (path.isAbsolute(target) ? target : path.join(cwd, target))
         : cwd;
-      const res = syncTranscriptHash(meetingDir);
+      const res = syncTranscriptHash(meetingDir, { yes: Boolean(flags.yes || flags.y) });
       if (!res.ok) {
         console.error(`⛔ ${res.error}`);
+        if (res.brokenCitations && res.brokenCitations.length > 0) {
+          for (const b of res.brokenCitations.slice(0, 5)) {
+            console.error(`  - [${b.type}] ${b.file}:${b.line} -> ${b.ref}`);
+          }
+        }
         return 1;
       }
       if (res.updatedFiles.length > 0) {

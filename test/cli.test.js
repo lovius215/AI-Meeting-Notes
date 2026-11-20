@@ -1737,10 +1737,12 @@ test('19. Parenthesized paths in Markdown #Lx-Ly refs and meetnotes sync-hash co
         '- 🟢 決議一（來源：[01-transcript.md](./01-transcript.md#L1-L3)）',
         '- 🟢 決議二（來源：[notes](notes(final).md#L1-L2)）',
         '- 🟢 決議三（來源：[full](meetings/Project(v2)/2026-11-20_週會_(上午場)/01-transcript.md#L2-L4)）',
+        '- 🟢 決議四（來源：[spaced](<notes (final v2).md#L1-L2>)）',
         '- 遠端連結忽略：https://en.wikipedia.org/wiki/Markdown_(markup)#L999'
       ].join('\n') + '\n',
       'utf8'
     );
+    fs.writeFileSync(path.join(parenDir, 'notes (final v2).md'), 'line1\nline2\n', 'utf8');
 
     const parenVerifyOk = runVerify({ cwd: tmpDir, target: path.join(tmpDir, 'meetings', 'Project(v2)'), silent: true });
     assert.equal(parenVerifyOk.ok, true, `Expected parenthesized refs to verify, got: ${JSON.stringify(parenVerifyOk.issues)}`);
@@ -1791,6 +1793,45 @@ test('19. Parenthesized paths in Markdown #Lx-Ly refs and meetnotes sync-hash co
     assert.equal(secondSync.ok, true);
     assert.deepEqual(secondSync.updatedFiles, []);
     assert.deepEqual(secondSync.alreadySyncedFiles, ['02-summary.md', '03-todos-and-discussion.md']);
+
+    // Part C: CRLF re-save of 01-transcript.md must NOT trigger stale_transcript
+    const crlfTrans = fs.readFileSync(transPath, 'utf8').replace(/\n/g, '\r\n');
+    fs.writeFileSync(transPath, crlfTrans, 'utf8');
+    const crlfVerify = runVerify({ cwd: tmpDir, target: mSync.meetingDir, silent: true });
+    assert.equal(crlfVerify.ok, true);
+    assert.equal(inspectMeetingDirectory(mSync.meetingDir).staleFiles.length, 0);
+
+    // Part D: sync-hash blocks large (>5%) rewrites or broken citations unless --yes is passed
+    fs.writeFileSync(transPath, '# 完全不同\n只剩一行\n', 'utf8');
+    const blockedBroken = syncTranscriptHash(mSync.meetingDir);
+    assert.equal(blockedBroken.ok, false);
+    assert.equal(blockedBroken.reason, 'broken_citations');
+
+    // Now test >5% rewrite where citations stay in bounds -> requires --yes
+    const longBaseline = Array.from({ length: 20 }, (_, i) => `[00:00:${String(i + 1).padStart(2, '0')}] **王經理**：第 ${i + 1} 句內容。`).join('\n');
+    const mGuard = createMeeting({
+      cwd: tmpDir,
+      project: 'SyncProj',
+      title: 'Guard-Test',
+      date: '2026-11-21',
+      transcriptText: longBaseline
+    });
+    assert.equal(mGuard.ok, true);
+    const rewrittenLong = Array.from({ length: 20 }, (_, i) => `[00:00:${String(i + 1).padStart(2, '0')}] **王經理**：改寫第 ${i + 1} 句。`).join('\n');
+    createMeeting({
+      cwd: tmpDir,
+      project: 'SyncProj',
+      title: 'Guard-Test',
+      date: '2026-11-21',
+      transcriptText: rewrittenLong,
+      force: true
+    });
+    const blockedLarge = syncTranscriptHash(mGuard.meetingDir);
+    assert.equal(blockedLarge.ok, false);
+    assert.equal(blockedLarge.reason, 'confirmation_required');
+    assert.equal(main(['sync-hash', mGuard.meetingDir]), 1);
+    assert.equal(main(['sync-hash', mGuard.meetingDir, '--yes']), 0);
+    assert.equal(runVerify({ cwd: tmpDir, target: mGuard.meetingDir, silent: true }).ok, true);
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

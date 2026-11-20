@@ -85,5 +85,7 @@ my-meetings-workspace/
 
 AI は3ファイルを作成後、**完稿検核 Rule** を自動実行し、聞き取れない数値や過去会議との矛盾があればアラートを表示します。また、テンプレート内で会議中に言及されなかった項目は捏造せず `⚠️ [会議未言及 - 要手動追記]` と明記します。
 
+> **補助 CLI コマンド**: `meetnotes verify` / `meetnotes inspect` / `meetnotes sync-hash [会議フォルダ] [--yes]`（文字起こしの誤字修正後に要約のハッシュを同期）/ `meetnotes pdf --merge` / `meetnotes commit`
+
 ## License
 MIT

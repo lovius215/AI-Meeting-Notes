@@ -460,7 +460,7 @@ description: Zero-Command Conversational AI Meeting Notes & Knowledge Base Assis
   - \`03-todos-and-discussion.md\`: Action items table, \`🚨 Human Intervention Required\` (\`⚠️ [需人為確認]\`), \`⚡ Cross-Meeting Conflict Alerts\`, and post-meeting discussion.
   - \`deliverables/\` & \`meetings/<Project>/templates/\`: Post-meeting deliverables generated from templates; mark any undiscussed template field as \`⚠️ [會議未提及 - 需人工補填]\`.
   - \`meetings/<Project>/index.md\`: Rolling active-decision snapshot for $O(1)$ cross-meeting conflict detection.
-- **CLI & Programmatic Utilities**: \`${cliName} new-meeting\`, \`${cliName} inspect\`, \`${cliName} verify\`, \`${cliName} pdf --merge\` (or \`--html\`), and \`${cliName} commit\`.
+- **CLI & Programmatic Utilities**: \`${cliName} new-meeting\`, \`${cliName} sync-hash\` (syncs \`transcript-sha256\` after minor manual transcript typo fixes without overwriting prose; requires \`--yes\` for >5% changes), \`${cliName} inspect\`, \`${cliName} verify\`, \`${cliName} pdf --merge\` (or \`--html\`), and \`${cliName} commit\`.
 `;
   }
   return `---
@@ -856,6 +856,7 @@ ${isConv
 | \`${cliName} upgrade [--dry-run]\` | 更新内建规则模板（保留锁定语言、\`<claude-mem-context>\` 与附加于档尾的客制段落；若修改过内文会自动存 \`.bak\` 备份） |
 | \`${cliName} status\` / \`check\` / \`doctor\` | 查看进度统计、核心文件检查与环境完整性诊断 |
 | \`${cliName} new-meeting <专案> <主题> --transcript <file> [--media <file>] [--empty] [--force] [--force-all]\` | 确定性建立会议目录、计算媒体 \`SHA-256\` 并执行 0-Token 语者批次替换（\`--empty\` 建立待确认骨架；\`--force\` 仅重写 \`01\` 并备份 \`.bak\`；\`--force-all\` 重写 \`01~03\` 并备份 \`.bak\`） |
+| \`${cliName} sync-hash [会议目录] [--yes]\` | 人工微调 \`01-transcript.md\` 错字并确认下游无误后，同步 \`02/03\` 之 \`transcript-sha256\` 指纹且不覆盖人工内文（若改动 >5% 或引用失效需加 \`--yes\`） |
 | \`${cliName} inspect <会议目录>\` | 执行完稿强制检核 Rule（支援结构化 \`- **键**：值\` 与自然语言 **上线日/预算/负责人** 跨期冲突侦测；若含 \`🚨\` 或 \`⚡\` 则回传非 0 状态码） |
 | \`${cliName} deliverable --meeting <dir> --template <file> [--out <file>]\` | 套用范本产出会后衍生文档至 \`deliverables/\`，未提及栏位自动标记 \`⚠️ [會議未提及 - 需人工補填]\` |
 
@@ -1016,6 +1017,7 @@ Supports \`tool:init (gti) -> tool:propose (gtp) -> tool:analyze (gta) -> tool:s
 | \`${cliName} upgrade [--dry-run]\` | Refresh built-in rule templates (preserves locked language, \`<claude-mem-context>\` & custom sections appended at end of file; saves \`.bak\` backup if modified in-place) |
 | \`${cliName} status\` / \`check\` / \`doctor\` | Display progress statistics, file integrity checks, and environment diagnostics |
 | \`${cliName} new-meeting <project> <title> --transcript <file> [--media <file>] [--empty] [--force] [--force-all]\` | Deterministically create meeting folder, compute media \`SHA-256\`, and run 0-Token speaker batch replacement (\`--empty\` creates unverified \`⚠️\` skeleton; \`--force\` only overwrites \`01\` with \`.bak\` backup; \`--force-all\` overwrites \`01~03\` with \`.bak\`) |
+| \`${cliName} sync-hash [meetingDir] [--yes]\` | Sync \`transcript-sha256\` in \`02-summary.md\` & \`03-todos-and-discussion.md\` after minor manual transcript typo edits without overwriting prose (requires \`--yes\` if >5% changed or citations are broken) |
 | \`${cliName} inspect <meetingDir>\` | Run Post-Creation Inspection Rule (detects cross-meeting conflicts on any \`- **Key**: Value\` field and natural-language **Launch Date / Budget / Owner**; exits non-zero on \`🚨\` or \`⚡\`) |
 | \`${cliName} deliverable --meeting <dir> --template <file> [--out <file>]\` | Generate template deliverable in \`deliverables/\`, flagging missing fields with \`⚠️ [會議未提及 - 需人工補填]\` |
 
@@ -1141,6 +1143,8 @@ my-meetings-workspace/
 
 AI は3ファイルを作成後、**完稿検核 Rule** を自動実行し、聞き取れない数値や過去会議との矛盾があればアラートを表示します。また、テンプレート内で会議中に言及されなかった項目は捏造せず \`⚠️ [会議未言及 - 要手動追記]\` と明記します。
 
+> **補助 CLI コマンド**: \`${cliName} verify\` / \`${cliName} inspect\` / \`${cliName} sync-hash [会議フォルダ] [--yes]\`（文字起こしの誤字修正後に要約のハッシュを同期）/ \`${cliName} pdf --merge\` / \`${cliName} commit\`
+
 ## License
 MIT
 `;
@@ -1221,6 +1225,8 @@ my-meetings-workspace/
 \`\`\`
 
 AI가 3개 회의 문서와 파생 문서를 생성한 뒤 **완료 검수 Rule**을 자동 실행하여, 불확실한 항목(🚨)과 이전 회의 결정사항과의 충돌(⚡), 템플릿 내 미언급 항목(\`⚠️ [회의 미언급 - 수동 입력 필요]\`)을 정확히 보고합니다.
+
+> **보조 CLI 명령어**: \`${cliName} verify\` / \`${cliName} inspect\` / \`${cliName} sync-hash [회의 폴더] [--yes]\`(녹취록 오탈자 수정 후 요약 해시 동기화) / \`${cliName} pdf --merge\` / \`${cliName} commit\`
 
 ## License
 MIT
@@ -1426,6 +1432,7 @@ ${isConv
 | \`${cliName} upgrade [--dry-run]\` | 別名 \`update\`；更新內建規則模板（保留鎖定語言、\`<claude-mem-context>\` 與附加於檔尾的客製化段落；若曾修改內文會自動存 \`.bak\` 備份） |
 | \`${cliName} status\` / \`check\` / \`doctor\` | 查看進度統計、核心檔案檢查與系統環境完整性診斷 |
 | \`${cliName} new-meeting <專案> <主題> --transcript <file> [--media <file>] [--empty] [--force] [--force-all]\` | 確定性建立會議目錄、計算媒體 \`SHA-256\` 並執行 0-Token 語者批次替換（\`--empty\` 建立待確認 \`⚠️\` 骨架；\`--force\` 僅重寫 \`01-transcript.md\` 並存 \`.bak\` 備份，保留人工編修之 \`02/03\`；\`--force-all\` 重寫 \`01~03\` 並存 \`.bak\`） |
+| \`${cliName} sync-hash [會議目錄] [--yes]\` | 人工微調 \`01-transcript.md\` 錯字並確認下游文件無誤後，同步 \`02-summary.md\` 與 \`03-todos-and-discussion.md\` 之 \`transcript-sha256\` 指紋而不覆蓋人工內文（變動 >5% 或引用失效時需加 \`--yes\`） |
 | \`${cliName} inspect <會議目錄>\` | 執行完稿強制檢核 Rule（支援結構化 \`- **鍵**：值\` 與自然語言 **預計上線日／預算／負責人** 跨期衝突偵測；若含未確認 \`🚨\` 或跨期衝突 \`⚡\` 則回傳非 0 狀態碼） |
 | \`${cliName} deliverable --meeting <dir> --template <file> [--out <file>]\` | 套用範本產出會後衍生文件至 \`deliverables/\`，未提及欄位自動標記 \`⚠️ [會議未提及 - 需人工補填]\` |
 

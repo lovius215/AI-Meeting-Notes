@@ -120,6 +120,7 @@ my-meetings-workspace/
 | `meetnotes upgrade [--dry-run]` | 更新内建规则模板（保留锁定语言、`<claude-mem-context>` 与附加于档尾的客制段落；若修改过内文会自动存 `.bak` 备份） |
 | `meetnotes status` / `check` / `doctor` | 查看进度统计、核心文件检查与环境完整性诊断 |
 | `meetnotes new-meeting <专案> <主题> --transcript <file> [--media <file>] [--empty] [--force] [--force-all]` | 确定性建立会议目录、计算媒体 `SHA-256` 并执行 0-Token 语者批次替换（`--empty` 建立待确认骨架；`--force` 仅重写 `01` 并备份 `.bak`；`--force-all` 重写 `01~03` 并备份 `.bak`） |
+| `meetnotes sync-hash [会议目录] [--yes]` | 人工微调 `01-transcript.md` 错字并确认下游无误后，同步 `02/03` 之 `transcript-sha256` 指纹且不覆盖人工内文（若改动 >5% 或引用失效需加 `--yes`） |
 | `meetnotes inspect <会议目录>` | 执行完稿强制检核 Rule（支援结构化 `- **键**：值` 与自然语言 **上线日/预算/负责人** 跨期冲突侦测；若含 `🚨` 或 `⚡` 则回传非 0 状态码） |
 | `meetnotes deliverable --meeting <dir> --template <file> [--out <file>]` | 套用范本产出会后衍生文档至 `deliverables/`，未提及栏位自动标记 `⚠️ [會議未提及 - 需人工補填]` |
 

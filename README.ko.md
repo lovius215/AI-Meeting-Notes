@@ -78,5 +78,7 @@ my-meetings-workspace/
 
 AI가 3개 회의 문서와 파생 문서를 생성한 뒤 **완료 검수 Rule**을 자동 실행하여, 불확실한 항목(🚨)과 이전 회의 결정사항과의 충돌(⚡), 템플릿 내 미언급 항목(`⚠️ [회의 미언급 - 수동 입력 필요]`)을 정확히 보고합니다.
 
+> **보조 CLI 명령어**: `meetnotes verify` / `meetnotes inspect` / `meetnotes sync-hash [회의 폴더] [--yes]`(녹취록 오탈자 수정 후 요약 해시 동기화) / `meetnotes pdf --merge` / `meetnotes commit`
+
 ## License
 MIT
