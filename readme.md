@@ -185,6 +185,9 @@ my-meetings-workspace/
 | `meetnotes commit [目標] [-m <訊息>]` | 先跑 `verify` -> 安全 Git 歸檔（自動排除敏感檔與影音大檔，遇衝突安全停止） |
 | `meetnotes upgrade [--dry-run]` | 別名 `update`；保留現有語言與 `<claude-mem-context>` 無損升級隱藏規則庫 |
 | `meetnotes status` / `check` / `doctor` | 查看進度統計、核心檔案檢查與系統環境完整性診斷 |
+| `meetnotes new-meeting <專案> <主題> --transcript <file> [--media <file>]` | 確定性建立會議目錄、計算媒體 `SHA-256` 並執行 0-Token 語者批次替換 |
+| `meetnotes inspect <會議目錄>` | 執行完稿強制檢核 Rule（若含未確認 `🚨` 或跨期衝突 `⚡` 則回傳非 0 狀態碼提醒人工裁示） |
+| `meetnotes deliverable --meeting <dir> --template <file> [--out <file>]` | 套用範本產出會後衍生文件至 `deliverables/`，未提及欄位自動標記 `⚠️ [會議未提及 - 需人工補填]` |
 
 ---
 

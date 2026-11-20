@@ -140,9 +140,17 @@ function runUpgrade({ cwd = process.cwd(), flags = {} } = {}) {
   for (const legacyName of new Set([CLI_NAME, targetCli])) {
     const legacySkillDir = path.join(legacySkillsRoot, legacyName);
     if (fs.existsSync(legacySkillDir)) {
-      actions.push({ type: 'migrate', file: `skills/${legacyName} -> ${targetHiddenDir}/skills/${targetCli}` });
-      if (!isDryRun) {
-        fs.rmSync(legacySkillDir, { recursive: true, force: true });
+      const legacySkillMdPath = path.join(legacySkillDir, 'SKILL.md');
+      const entries = fs.readdirSync(legacySkillDir);
+      const onlyHasSkillMd = entries.length === 1 && entries[0] === 'SKILL.md';
+      const isToolSkill = onlyHasSkillMd && fs.existsSync(legacySkillMdPath) && isToolGeneratedContent(fs.readFileSync(legacySkillMdPath, 'utf8'));
+      if (isToolSkill) {
+        actions.push({ type: 'migrate', file: `skills/${legacyName} -> ${targetHiddenDir}/skills/${targetCli}` });
+        if (!isDryRun) {
+          fs.rmSync(legacySkillDir, { recursive: true, force: true });
+        }
+      } else {
+        actions.push({ type: 'preserve', file: `skills/${legacyName} (custom user skill preserved)` });
       }
     }
   }

@@ -128,6 +128,7 @@ function isSensitiveFile(filePath) {
 const BOOLEAN_FLAGS = new Set([
   'full',
   'force',
+  'empty',
   'merge',
   'html',
   'npm',

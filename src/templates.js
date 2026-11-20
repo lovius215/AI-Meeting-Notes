@@ -949,6 +949,9 @@ Supports \`tool:init (gti) -> tool:propose (gtp) -> tool:analyze (gta) -> tool:s
 | \`${cliName} pdf [target] [--merge] [--html] [--output <file>]\` | 0-Token export of meeting notes or specs to A4 PDF or HTML |
 | \`${cliName} commit [target] [-m <msg>]\` | Pre-commit \`verify\` -> safe Git archive (excludes sensitive files & large media, stops safely on merge conflicts) |
 | \`${cliName} status\` / \`check\` / \`doctor\` | Display progress statistics, file integrity checks, and environment diagnostics |
+| \`${cliName} new-meeting <project> <title> --transcript <file> [--media <file>]\` | Deterministically create meeting folder, compute media \`SHA-256\`, and run 0-Token speaker batch replacement |
+| \`${cliName} inspect <meetingDir>\` | Run Post-Creation Inspection Rule (exits non-zero if \`🚨\` uncertainty or \`⚡\` cross-meeting conflicts need human review) |
+| \`${cliName} deliverable --meeting <dir> --template <file> [--out <file>]\` | Generate template deliverable in \`deliverables/\`, flagging missing fields with \`⚠️ [會議未提及 - 需人工補填]\` |
 
 ---
 
@@ -1344,6 +1347,9 @@ ${isConv
 | \`${cliName} commit [目標] [-m <訊息>]\` | 先跑 \`verify\` -> 安全 Git 歸檔（自動排除敏感檔與影音大檔，遇衝突安全停止） |
 | \`${cliName} upgrade [--dry-run]\` | 別名 \`update\`；保留現有語言與 \`<claude-mem-context>\` 無損升級隱藏規則庫 |
 | \`${cliName} status\` / \`check\` / \`doctor\` | 查看進度統計、核心檔案檢查與系統環境完整性診斷 |
+| \`${cliName} new-meeting <專案> <主題> --transcript <file> [--media <file>]\` | 確定性建立會議目錄、計算媒體 \`SHA-256\` 並執行 0-Token 語者批次替換 |
+| \`${cliName} inspect <會議目錄>\` | 執行完稿強制檢核 Rule（若含未確認 \`🚨\` 或跨期衝突 \`⚡\` 則回傳非 0 狀態碼提醒人工裁示） |
+| \`${cliName} deliverable --meeting <dir> --template <file> [--out <file>]\` | 套用範本產出會後衍生文件至 \`deliverables/\`，未提及欄位自動標記 \`⚠️ [會議未提及 - 需人工補填]\` |
 
 ---
 

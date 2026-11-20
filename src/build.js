@@ -107,8 +107,12 @@ function runBuild({ cwd = process.cwd(), subcommand = 'build', flags = {} } = {}
   });
 
   // Clean up mother meta-agent & hidden skill/rules from the generated npm project when assembling in-place
-  if (path.resolve(outDir) === path.resolve(cwd) && (cliName !== CLI_NAME || cliName !== 'genaitool')) {
-    for (const hDir of new Set(['.genaitool', ...(cliName !== CLI_NAME ? [HIDDEN_DIR] : []), `.${cliName}`])) {
+  if (path.resolve(outDir) === path.resolve(cwd)) {
+    const dirsToRemove = new Set(['.genaitool', `.${cliName}`]);
+    if (cliName !== CLI_NAME) {
+      dirsToRemove.add(HIDDEN_DIR);
+    }
+    for (const hDir of dirsToRemove) {
       const metaHiddenDir = path.join(outDir, hDir);
       if (fs.existsSync(metaHiddenDir)) {
         fs.rmSync(metaHiddenDir, { recursive: true, force: true });

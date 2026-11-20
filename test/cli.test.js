@@ -603,10 +603,19 @@ test('11. comprehensive fixes: 5-lang meeting rules, safe upgrade/re-init, recur
     assert.match(delivText, /⚠️ \[會議未提及 - 需人工補填: BUDGET_IMPACT\]/);
 
     // Deterministic inspection detects both human-intervention items and cross-meeting conflict (2026-12-15 vs 2026-12-01)
+    // Because m2 has unresolved human-intervention items and a cross-meeting conflict, structureOk is true while ok is false (needsHumanReview: true)
     const inspectRes = inspectMeetingDirectory(m2.meetingDir);
-    assert.equal(inspectRes.ok, true);
+    assert.equal(inspectRes.structureOk, true);
+    assert.equal(inspectRes.needsHumanReview, true);
+    assert.equal(inspectRes.ok, false);
     assert.equal(inspectRes.humanInterventionItems.length >= 2, true);
     assert.equal(inspectRes.conflicts.some((c) => c.key === '預計上線日' && c.previousValue.includes('2026-12-01') && c.currentValue.includes('2026-12-15')), true);
+
+    // Exact line citation check when --media is provided: line 11 is blank, firstContentLine is 12!
+    assert.equal(m2.firstContentLine, 12);
+    const m2TranscriptLines = fs.readFileSync(path.join(m2.meetingDir, '01-transcript.md'), 'utf8').split('\n');
+    assert.equal(m2TranscriptLines[10], '');
+    assert.match(m2TranscriptLines[11], /^\[00:01:00\] \*\*王經理 \(PM\)\*\*/);
 
     // Recursive verify on 'meetings' must pass (GitHub permalink ignored, #L1-L3 valid, templates/ skipped)
     const verifyMeetings = runVerify({ cwd: meetWorkspace, target: 'meetings', silent: true });
@@ -654,4 +663,149 @@ test('11. comprehensive fixes: 5-lang meeting rules, safe upgrade/re-init, recur
   assert.match(renderedHtml, /<a href="#">click<\/a>/);
   assert.doesNotMatch(renderedHtml, /href="javascript:/i);
   assert.match(renderedHtml, /<td>a \| b<\/td>\s*<td>c<\/td>/);
+});
+
+test('12. negative paths & security guardrails: zero-hallucination missing input rejection, overwrite lock, path traversal, WebVTT hourless/multiline, boolean CLI flags & prose conflict detection', () => {
+  const { main } = require('../bin/cli');
+  const tmpDir = makeTempDir('meetnotes-guardrails-');
+  try {
+    runInit({ cwd: tmpDir, flags: { full: true, lang: 'ja', 'no-git': true } });
+
+    // 12a. Running init --lang en on an existing ja workspace updates AGENTS.md & SKILL.md to en
+    const switchLangRes = runInit({ cwd: tmpDir, flags: { lang: 'en', 'no-git': true } });
+    assert.equal(switchLangRes.lang, 'en');
+    assert.match(fs.readFileSync(path.join(tmpDir, HIDDEN_DIR, 'AGENTS.md'), 'utf8'), /Locked Language\*\*: `en`/);
+
+    // 12b. upgrade preserves user-authored skills/meetnotes/ directory
+    const customSkillDir = path.join(tmpDir, 'skills', CLI_NAME);
+    fs.mkdirSync(customSkillDir, { recursive: true });
+    fs.writeFileSync(path.join(customSkillDir, 'SKILL.md'), '# My Custom User Skill\nNever delete user skill!', 'utf8');
+    const upgRes = runUpgrade({ cwd: tmpDir });
+    assert.equal(upgRes.ok, true);
+    assert.equal(fs.existsSync(path.join(customSkillDir, 'SKILL.md')), true);
+
+    // 12c. createMeeting MUST reject missing transcript (never fabricate fake [00:00:05] dialogue or mark 🟢!)
+    const noTranscriptRes = createMeeting({ cwd: tmpDir, project: 'Project-A', title: 'No-Input', date: '2026-11-20' });
+    assert.equal(noTranscriptRes.ok, false);
+    assert.equal(noTranscriptRes.reason, 'missing_transcript');
+
+    // Bad --media and bad --transcript file paths MUST fail loudly
+    const badMediaRes = createMeeting({
+      cwd: tmpDir,
+      project: 'Project-A',
+      title: 'Bad-Media',
+      date: '2026-11-20',
+      mediaFile: 'does-not-exist.mp3',
+      transcriptText: '[00:00:01] SPEAKER_00: Hello'
+    });
+    assert.equal(badMediaRes.ok, false);
+    assert.equal(badMediaRes.reason, 'media_not_found');
+
+    const badTranscriptRes = createMeeting({
+      cwd: tmpDir,
+      project: 'Project-A',
+      title: 'Bad-Transcript',
+      date: '2026-11-20',
+      transcriptFile: 'does-not-exist.txt'
+    });
+    assert.equal(badTranscriptRes.ok, false);
+    assert.equal(badTranscriptRes.reason, 'transcript_not_found');
+
+    // allowEmpty: true creates an unverified skeleton marked with 🔴/⚠️ (zero 🟢 badges!) and inspect returns ok: false
+    const emptyMeeting = createMeeting({
+      cwd: tmpDir,
+      project: 'Project-A',
+      title: 'Empty-Skeleton',
+      date: '2026-11-10',
+      allowEmpty: true
+    });
+    assert.equal(emptyMeeting.ok, true);
+    const emptySummary = fs.readFileSync(path.join(emptyMeeting.meetingDir, '02-summary.md'), 'utf8');
+    assert.equal(emptySummary.includes('🟢'), false);
+    assert.equal(emptySummary.includes('⚠️ [需人為確認'), true);
+    const emptyInspect = inspectMeetingDirectory(emptyMeeting.meetingDir);
+    assert.equal(emptyInspect.ok, false);
+    assert.equal(emptyInspect.needsHumanReview, true);
+
+    // 12d. Overwrite protection on 01-transcript.md: re-running createMeeting without force MUST fail
+    const validM1 = createMeeting({
+      cwd: tmpDir,
+      project: 'Project-A',
+      title: 'Budget-Meeting',
+      date: '2026-11-13',
+      transcriptText: '[00:00:10] **王經理**：這次我們決定預算定在 50 萬，預計上線日定在 12/01。'
+    });
+    assert.equal(validM1.ok, true);
+    fs.appendFileSync(path.join(validM1.meetingDir, '01-transcript.md'), '\n# HUMAN_PROOFREAD_MARKER\n', 'utf8');
+
+    const overwriteAttempt = createMeeting({
+      cwd: tmpDir,
+      project: 'Project-A',
+      title: 'Budget-Meeting',
+      date: '2026-11-13',
+      transcriptText: '[00:00:10] Overwritten text'
+    });
+    assert.equal(overwriteAttempt.ok, false);
+    assert.equal(overwriteAttempt.reason, 'meeting_already_exists');
+    assert.match(fs.readFileSync(path.join(validM1.meetingDir, '01-transcript.md'), 'utf8'), /HUMAN_PROOFREAD_MARKER/);
+
+    // 12e. Path traversal rejection on date, project, title, and deliverable outputName
+    assert.equal(createMeeting({ cwd: tmpDir, project: 'Project-A', title: 'Sync', date: '../../../escaped', transcriptText: 'hi' }).reason, 'invalid_date');
+    assert.equal(createMeeting({ cwd: tmpDir, project: '..', title: 'Sync', date: '2026-11-20', transcriptText: 'hi' }).reason, 'invalid_path');
+    assert.equal(createMeeting({ cwd: tmpDir, project: '../outside', title: 'Sync', date: '2026-11-20', transcriptText: 'hi' }).reason, 'invalid_path');
+    assert.equal(createMeeting({ cwd: tmpDir, project: 'Project-A', title: '../../outside', date: '2026-11-20', transcriptText: 'hi' }).reason, 'invalid_path');
+
+    // 12f. WebVTT hourless format (00:01.000 --> 00:03.000) & multi-line cue support
+    const vttRes = applySpeakerMapping({
+      transcriptText: 'WEBVTT\n\n00:01.000 --> 00:03.000 align:start\nSPEAKER_00: 第一行字幕\nSPEAKER_01: 同時間軸第二行字幕\n',
+      mapping: { SPEAKER_00: 'Alice', SPEAKER_01: 'Bob' }
+    });
+    assert.equal(vttRes.lines.length, 2);
+    assert.equal(vttRes.lines[0], '[00:00:01] **Alice**: 第一行字幕');
+    assert.equal(vttRes.lines[1], '[00:00:01] **Bob**: 同時間軸第二行字幕');
+
+    // 12g. Natural-language prose cross-meeting conflict detection ("預算改為 60 萬" vs "預算定在 50 萬")
+    fs.appendFileSync(path.join(validM1.meetingDir, '02-summary.md'), '\n本次會議全體同意將預算定在 50 萬，預計上線日鎖定在 12/01（[01-transcript.md](./01-transcript.md#L1-L11)）。\n', 'utf8');
+    const validM2 = createMeeting({
+      cwd: tmpDir,
+      project: 'Project-A',
+      title: 'Followup',
+      date: '2026-11-20',
+      transcriptText: '[00:02:00] **王經理**：經過評估，預算改為 60 萬，且上線日延後到 12/15。'
+    });
+    assert.equal(validM2.ok, true);
+    fs.appendFileSync(path.join(validM2.meetingDir, '02-summary.md'), '\n經過討論，決定將預算改為 60 萬，且上線日延後到 12/15（[01-transcript.md](./01-transcript.md#L1-L11)）。\n', 'utf8');
+
+    const proseInspect = inspectMeetingDirectory(validM2.meetingDir);
+    assert.equal(proseInspect.ok, false);
+    assert.equal(proseInspect.conflicts.some((c) => c.key === '預算' && c.previousValue.includes('50 萬') && c.currentValue.includes('60 萬')), true);
+    assert.equal(proseInspect.conflicts.some((c) => c.key === '預計上線日' && c.previousValue.includes('12/01') && c.currentValue.includes('12/15')), true);
+
+    // 12h. deliverable boolean flag protection (--REQUESTER without value must not write "true", --out without value returns exit code 1)
+    const tplPath = path.join(validM2.projectDir, 'templates', 'change-request.md');
+    const boolDeliv = generateDeliverableFromTemplate({
+      meetingDir: validM2.meetingDir,
+      templatePath: tplPath,
+      outputName: 'safe-cr.md',
+      values: { REQUESTER: true, PROJECT_NAME: 'Project-A' }
+    });
+    assert.equal(boolDeliv.ok, true);
+    assert.equal(boolDeliv.missingFields.includes('REQUESTER'), true);
+    assert.doesNotMatch(fs.readFileSync(boolDeliv.outputPath, 'utf8'), /申請人\*\*：true/);
+
+    const traversalDeliv = generateDeliverableFromTemplate({
+      meetingDir: validM2.meetingDir,
+      templatePath: tplPath,
+      outputName: '../../escaped.md',
+      values: {}
+    });
+    assert.equal(traversalDeliv.ok, false);
+    assert.equal(traversalDeliv.reason, 'invalid_output_name');
+
+    // CLI value-less --out returns 1 without throwing
+    const cliExitCode = main(['deliverable', '--out']);
+    assert.equal(cliExitCode, 1);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });

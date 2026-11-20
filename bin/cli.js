@@ -48,6 +48,15 @@ Standard Commands:
 
   status | check | doctor [--self]
       Displays project stage progress, workspace file integrity, and environment health
+
+  new-meeting | meeting [project] [title] [--date YYYY-MM-DD] [--transcript <file>] [--media <file>] [--map "SPEAKER_00=Name"] [--empty] [--force]
+      Deterministically creates a meeting folder under meetings/<project>/<date>_<title>/ with SHA-256 media hashing & 0-Token speaker batch replacement
+
+  inspect [meetingDir]
+      Runs the 7-dimension Post-Creation Inspection Rule (returns non-zero if files/citations are missing or if 🚨 Human-in-the-Loop / ⚡ Cross-Meeting Conflicts require review)
+
+  deliverable --meeting <dir> --template <file> [--out <filename.md>] [--FIELD value]
+      Generates a post-meeting deliverable from a template into deliverables/, flagging any unmentioned fields with ⚠️ [會議未提及 - 需人工補填]
 `);
 }
 
@@ -115,16 +124,24 @@ function main(argv = process.argv.slice(2)) {
     }
     case 'meeting':
     case 'new-meeting': {
-      const fs = require('node:fs');
-      const project = flags.project || target || 'Project-A';
-      const title = flags.title || positional[2] || 'Weekly-Sync';
-      const date = flags.date || new Date().toISOString().slice(0, 10);
-      const transcriptText = flags.transcript && fs.existsSync(flags.transcript)
-        ? fs.readFileSync(flags.transcript, 'utf8')
-        : '';
-      let mapping = {};
-      if (flags.map) {
-        for (const pair of String(flags.map).split(',')) {
+      const project = typeof flags.project === 'string' ? flags.project : (target || 'Project-A');
+      const title = typeof flags.title === 'string' ? flags.title : (positional[2] || 'Weekly-Sync');
+      const date = typeof flags.date === 'string' ? flags.date : new Date().toISOString().slice(0, 10);
+      if (flags.date === true) {
+        console.error('Missing value for --date (expected YYYY-MM-DD).');
+        return 1;
+      }
+      if (flags.media === true) {
+        console.error('Missing file path for --media.');
+        return 1;
+      }
+      if (flags.transcript === true) {
+        console.error('Missing file path for --transcript.');
+        return 1;
+      }
+      const mapping = {};
+      if (typeof flags.map === 'string') {
+        for (const pair of flags.map.split(',')) {
           const [k, v] = pair.split('=');
           if (k && v) mapping[k.trim()] = v.trim();
         }
@@ -134,12 +151,19 @@ function main(argv = process.argv.slice(2)) {
         project,
         title,
         date,
-        mediaFile: flags.media || null,
-        transcriptText,
-        mapping
+        mediaFile: typeof flags.media === 'string' ? flags.media : null,
+        transcriptFile: typeof flags.transcript === 'string' ? flags.transcript : null,
+        transcriptText: typeof flags.text === 'string' ? flags.text : '',
+        mapping,
+        allowEmpty: Boolean(flags.empty),
+        force: Boolean(flags.force)
       });
+      if (!res.ok) {
+        console.error(`⛔ ${res.error}`);
+        return 1;
+      }
       console.log(`✅ Meeting created: ${res.meetingDir}`);
-      return res.ok ? 0 : 1;
+      return 0;
     }
     case 'inspect': {
       const path = require('node:path');
@@ -152,20 +176,25 @@ function main(argv = process.argv.slice(2)) {
     }
     case 'deliverable': {
       const path = require('node:path');
-      const meetingDir = flags.meeting
+      if (flags.out === true || flags.meeting === true || flags.template === true) {
+        console.error('⛔ Missing argument value for --meeting, --template, or --out.');
+        return 1;
+      }
+      const meetingDir = typeof flags.meeting === 'string'
         ? (path.isAbsolute(flags.meeting) ? flags.meeting : path.join(cwd, flags.meeting))
         : cwd;
-      const templatePath = flags.template
+      const templatePath = typeof flags.template === 'string'
         ? (path.isAbsolute(flags.template) ? flags.template : path.join(cwd, flags.template))
         : '';
+      const outName = typeof flags.out === 'string' ? flags.out : 'deliverable.md';
       const res = generateDeliverableFromTemplate({
         meetingDir,
         templatePath,
-        outputName: flags.out || 'deliverable.md',
+        outputName: outName,
         values: flags
       });
       if (!res.ok) {
-        console.error(res.error);
+        console.error(`⛔ ${res.error}`);
         return 1;
       }
       console.log(`✅ Deliverable generated: ${res.outputPath}`);

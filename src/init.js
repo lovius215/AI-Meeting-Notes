@@ -73,6 +73,13 @@ function runInit({ cwd = process.cwd(), flags = {} } = {}) {
   const mode = TOOL_MODES.includes(flags.mode)
     ? flags.mode
     : ((existingCfg && existingCfg.mode) || DEFAULT_MODE);
+  const langOrModeChanged = Boolean(
+    existingCfg && (
+      (flags.lang && flags.lang !== existingCfg.lang) ||
+      (flags.mode && TOOL_MODES.includes(flags.mode) && flags.mode !== existingCfg.mode)
+    )
+  );
+  const shouldRefreshTemplates = Boolean(flags.force || langOrModeChanged);
   const isFull = Boolean(flags.full || (existingCfg && existingCfg.full));
   const useGit = flags['no-git'] ? false : (existingCfg && existingCfg.features && existingCfg.features.git === false && !flags.git ? false : true);
   const usePdf = flags['no-pdf'] ? false : (existingCfg && existingCfg.features && existingCfg.features.pdf === false && !flags.pdf ? false : true);
@@ -88,12 +95,12 @@ function runInit({ cwd = process.cwd(), flags = {} } = {}) {
     fs.copyFileSync(gitignoreTemplatePath, targetGitignore);
   }
 
-  // 2. Write .<cli>/AGENTS.md (protected against accidental overwrite on re-run unless --force is passed)
+  // 2. Write .<cli>/AGENTS.md (protected against accidental overwrite on re-run unless --force or --lang/--mode changed)
   const hiddenRoot = path.join(cwd, HIDDEN_DIR);
   ensureDir(hiddenRoot);
   const agentsPath = path.join(hiddenRoot, 'AGENTS.md');
   const legacyAgentsPath = path.join(cwd, 'AGENTS.md');
-  if (!fs.existsSync(agentsPath) || flags.force) {
+  if (!fs.existsSync(agentsPath) || shouldRefreshTemplates) {
     const existingMem = fs.existsSync(agentsPath)
       ? extractClaudeMemContext(fs.readFileSync(agentsPath, 'utf8'))
       : (fs.existsSync(legacyAgentsPath) ? extractClaudeMemContext(fs.readFileSync(legacyAgentsPath, 'utf8')) : null);
@@ -112,16 +119,16 @@ function runInit({ cwd = process.cwd(), flags = {} } = {}) {
   const readmes = renderAllReadmes({ lang, mode, cliName: CLI_NAME, pkgName: PACKAGE_NAME });
   for (const [rFile, rContent] of Object.entries(readmes)) {
     const rPath = path.join(cwd, rFile);
-    if (!fs.existsSync(rPath) || flags.force) {
+    if (!fs.existsSync(rPath) || shouldRefreshTemplates) {
       fs.writeFileSync(rPath, rContent, 'utf8');
     }
   }
 
-  // 3. Create .<cli>/skills/<cli>/SKILL.md (protected unless --force)
+  // 3. Create .<cli>/skills/<cli>/SKILL.md (protected unless --force or --lang/--mode changed)
   const skillDir = path.join(cwd, HIDDEN_DIR, 'skills', CLI_NAME);
   ensureDir(skillDir);
   const skillPath = path.join(skillDir, 'SKILL.md');
-  if (!fs.existsSync(skillPath) || flags.force) {
+  if (!fs.existsSync(skillPath) || shouldRefreshTemplates) {
     fs.writeFileSync(
       skillPath,
       renderSkillMd({ lang, mode, cliName: CLI_NAME, pkgName: PACKAGE_NAME }),

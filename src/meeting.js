@@ -6,16 +6,25 @@ const crypto = require('node:crypto');
 const { ensureDir } = require('./utils');
 
 /**
- * Compute SHA-256 checksum and file size of a media file
+ * Compute SHA-256 checksum and file size of a media file using 64 KiB streaming chunks
+ * so large multi-GB video files (.mp4 / .mkv) never exceed Node.js Buffer memory limits.
  */
 function getMediaMetadata(filePath) {
-  if (!filePath || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+  if (!filePath || typeof filePath !== 'string' || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
     return null;
   }
   const stat = fs.statSync(filePath);
   const hash = crypto.createHash('sha256');
-  const buf = fs.readFileSync(filePath);
-  hash.update(buf);
+  const fd = fs.openSync(filePath, 'r');
+  try {
+    const chunkBuf = Buffer.allocUnsafe(65536);
+    let bytesRead = 0;
+    while ((bytesRead = fs.readSync(fd, chunkBuf, 0, chunkBuf.length, null)) > 0) {
+      hash.update(bytesRead === chunkBuf.length ? chunkBuf : chunkBuf.subarray(0, bytesRead));
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
   return {
     fileName: path.basename(filePath),
     sizeBytes: stat.size,
@@ -23,29 +32,47 @@ function getMediaMetadata(filePath) {
   };
 }
 
+function normalizeTimestamp(tsRaw) {
+  const parts = String(tsRaw).split(':');
+  if (parts.length === 2) {
+    return `00:${parts[0].padStart(2, '0')}:${parts[1].padStart(2, '0')}`;
+  }
+  if (parts.length === 3) {
+    return `${parts[0].padStart(2, '0')}:${parts[1].padStart(2, '0')}:${parts[2].padStart(2, '0')}`;
+  }
+  return tsRaw;
+}
+
 /**
- * Parse .srt / .vtt / plain text rough transcript and deterministically apply
- * speaker & terminology mapping without LLM Output Token re-generation.
+ * Parse .srt / .vtt (including hourless MM:SS.mmm and multi-line cues) / plain text rough transcript
+ * and deterministically apply speaker & terminology mapping without LLM Output Token re-generation.
  */
 function applySpeakerMapping({ transcriptText = '', mapping = {}, terms = {} } = {}) {
   const rawLines = String(transcriptText).replace(/\r\n/g, '\n').split('\n');
   const normalizedLines = [];
-  let pendingTimestamp = null;
+  let activeTimestamp = null;
 
   for (let i = 0; i < rawLines.length; i++) {
     const line = rawLines[i].trim();
-    if (!line || line === 'WEBVTT' || /^\d+$/.test(line)) {
+    if (!line) {
+      activeTimestamp = null;
       continue;
     }
-    // Match SRT/VTT timestamp line: 00:01:23,456 --> 00:01:28,000
-    const tsMatch = line.match(/^(\d{2}:\d{2}:\d{2})[.,]\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}[.,]\d{3}/);
+    if (line === 'WEBVTT' || /^NOTE(?:\s|$)/.test(line) || /^\d+$/.test(line)) {
+      continue;
+    }
+    // Match SRT/VTT timestamp line: either HH:MM:SS.mmm or MM:SS.mmm (with comma or dot, and optional cue settings)
+    const tsMatch = line.match(/^((?:\d{2}:)?\d{2}:\d{2})[.,]\d{3}\s*-->\s*(?:\d{2}:)?\d{2}:\d{2}[.,]\d{3}(?:\s+.*)?$/);
     if (tsMatch) {
-      pendingTimestamp = tsMatch[1];
+      activeTimestamp = normalizeTimestamp(tsMatch[1]);
       continue;
     }
-    if (pendingTimestamp) {
-      normalizedLines.push(`[${pendingTimestamp}] ${line}`);
-      pendingTimestamp = null;
+    if (activeTimestamp) {
+      if (/^\[\d{2}:\d{2}:\d{2}\]/.test(line)) {
+        normalizedLines.push(line);
+      } else {
+        normalizedLines.push(`[${activeTimestamp}] ${line}`);
+      }
     } else {
       normalizedLines.push(line);
     }
@@ -123,8 +150,18 @@ function applySpeakerMapping({ transcriptText = '', mapping = {}, terms = {} } =
   };
 }
 
+function isSafePathSegment(seg) {
+  if (!seg || typeof seg !== 'string') return false;
+  const trimmed = seg.trim();
+  if (!trimmed || trimmed === '.' || trimmed === '..') return false;
+  if (trimmed.includes('..') || /[<>:"/\\|?*\x00-\x1f]/.test(trimmed)) return false;
+  return true;
+}
+
 /**
- * Create or update a periodic meeting folder under meetings/<project>/<date>_<title>/
+ * Create a periodic meeting folder under meetings/<project>/<date>_<title>/
+ * Enforces strict zero-hallucination, path-traversal prevention, media file validation,
+ * and overwrite protection on existing 01-transcript.md.
  */
 function createMeeting({
   cwd = process.cwd(),
@@ -133,17 +170,108 @@ function createMeeting({
   date = new Date().toISOString().slice(0, 10),
   attendees = [],
   mediaFile = null,
+  transcriptFile = null,
   transcriptText = '',
   mapping = {},
-  terms = {}
+  terms = {},
+  allowEmpty = false,
+  force = false
 } = {}) {
-  const safeProject = project.replace(/[<>:"/\\|?*]/g, '-').trim() || 'Project-A';
-  const safeTitle = title.replace(/[<>:"/\\|?*\s]+/g, '-').trim() || 'Meeting';
-  const folderName = `${date}_${safeTitle}`;
+  // 1. Validate date format (strictly YYYY-MM-DD) & prevent path traversal
+  if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date.trim())) {
+    return {
+      ok: false,
+      reason: 'invalid_date',
+      error: `Invalid date "${date}". Expected strict YYYY-MM-DD format.`
+    };
+  }
+  const cleanDate = date.trim();
 
-  const projectDir = path.join(cwd, 'meetings', safeProject);
+  if (!isSafePathSegment(project)) {
+    return {
+      ok: false,
+      reason: 'invalid_path',
+      error: `Invalid project name "${project}". Path traversal or special path characters are not allowed.`
+    };
+  }
+  const safeProject = project.trim();
+
+  const normalizedTitle = typeof title === 'string' ? title.trim().replace(/\s+/g, '-') : '';
+  if (!isSafePathSegment(normalizedTitle)) {
+    return {
+      ok: false,
+      reason: 'invalid_path',
+      error: `Invalid meeting title "${title}". Path traversal or special path characters are not allowed.`
+    };
+  }
+  const folderName = `${cleanDate}_${normalizedTitle}`;
+
+  const meetingsRoot = path.resolve(cwd, 'meetings');
+  const projectDir = path.resolve(meetingsRoot, safeProject);
+  const meetingDir = path.resolve(projectDir, folderName);
+
+  if (!projectDir.startsWith(meetingsRoot + path.sep) || !meetingDir.startsWith(projectDir + path.sep)) {
+    return {
+      ok: false,
+      reason: 'invalid_path',
+      error: 'Path traversal detected outside meetings/ directory.'
+    };
+  }
+
+  // 2. Validate mediaFile and transcriptFile paths if provided (never silently ignore bad paths!)
+  let resolvedMediaInput = null;
+  if (mediaFile !== null && mediaFile !== undefined && mediaFile !== false) {
+    if (typeof mediaFile !== 'string' || !mediaFile.trim()) {
+      return { ok: false, reason: 'media_not_found', error: 'Invalid --media file path.' };
+    }
+    resolvedMediaInput = path.isAbsolute(mediaFile) ? mediaFile : path.join(cwd, mediaFile);
+    if (!fs.existsSync(resolvedMediaInput) || !fs.statSync(resolvedMediaInput).isFile()) {
+      return {
+        ok: false,
+        reason: 'media_not_found',
+        error: `Media file not found: ${mediaFile}`
+      };
+    }
+  }
+
+  let effectiveTranscriptText = typeof transcriptText === 'string' ? transcriptText : '';
+  if (transcriptFile !== null && transcriptFile !== undefined && transcriptFile !== false) {
+    if (typeof transcriptFile !== 'string' || !transcriptFile.trim()) {
+      return { ok: false, reason: 'transcript_not_found', error: 'Invalid --transcript file path.' };
+    }
+    const resolvedTranscriptInput = path.isAbsolute(transcriptFile)
+      ? transcriptFile
+      : path.join(cwd, transcriptFile);
+    if (!fs.existsSync(resolvedTranscriptInput) || !fs.statSync(resolvedTranscriptInput).isFile()) {
+      return {
+        ok: false,
+        reason: 'transcript_not_found',
+        error: `Transcript file not found: ${transcriptFile}`
+      };
+    }
+    effectiveTranscriptText = fs.readFileSync(resolvedTranscriptInput, 'utf8');
+  }
+
+  const hasRealTranscript = Boolean(effectiveTranscriptText && effectiveTranscriptText.trim());
+  if (!hasRealTranscript && !allowEmpty) {
+    return {
+      ok: false,
+      reason: 'missing_transcript',
+      error: 'No transcript content provided (--transcript or transcriptText required; pass --empty / allowEmpty: true only to create an unverified skeleton).'
+    };
+  }
+
+  // 3. Protect existing human-edited 01-transcript.md unless force: true (--force)
+  const transcriptPath = path.join(meetingDir, '01-transcript.md');
+  if (fs.existsSync(transcriptPath) && !force) {
+    return {
+      ok: false,
+      reason: 'meeting_already_exists',
+      error: `Meeting transcript already exists at ${transcriptPath}. Pass --force to overwrite.`
+    };
+  }
+
   const templatesDir = path.join(projectDir, 'templates');
-  const meetingDir = path.join(projectDir, folderName);
   const mediaDir = path.join(meetingDir, 'media');
   const deliverablesDir = path.join(meetingDir, 'deliverables');
 
@@ -151,75 +279,87 @@ function createMeeting({
   ensureDir(deliverablesDir);
   ensureDir(templatesDir);
 
-  // 1. Copy media file into meetings/<project>/<date>_<title>/media/ if provided
+  // 4. Copy media file into meetings/<project>/<date>_<title>/media/ if provided
   let mediaMeta = null;
-  if (mediaFile) {
-    const srcMedia = path.isAbsolute(mediaFile) ? mediaFile : path.join(cwd, mediaFile);
-    if (fs.existsSync(srcMedia) && fs.statSync(srcMedia).isFile()) {
-      const destMedia = path.join(mediaDir, path.basename(srcMedia));
-      if (path.resolve(srcMedia) !== path.resolve(destMedia)) {
-        fs.copyFileSync(srcMedia, destMedia);
-      }
-      mediaMeta = getMediaMetadata(destMedia);
+  if (resolvedMediaInput) {
+    const destMedia = path.join(mediaDir, path.basename(resolvedMediaInput));
+    if (path.resolve(resolvedMediaInput) !== path.resolve(destMedia)) {
+      fs.copyFileSync(resolvedMediaInput, destMedia);
     }
+    mediaMeta = getMediaMetadata(destMedia);
   }
 
-  // 2. Process transcript with 0-Token batch mapping
-  const defaultTranscript = transcriptText || '[00:00:05] **主持人**：會議開始，確認專案進度與待辦事項。';
-  const mapped = applySpeakerMapping({ transcriptText: defaultTranscript, mapping, terms });
+  // 5. Process transcript (Zero-Hallucination: never fabricate dialogue or mark 🟢 without real input!)
+  const mapped = hasRealTranscript
+    ? applySpeakerMapping({ transcriptText: effectiveTranscriptText, mapping, terms })
+    : {
+        formattedText: '⚠️ [需人為確認 - 尚未匯入逐字稿內容 (Pending Transcript Import)]',
+        lines: ['⚠️ [需人為確認 - 尚未匯入逐字稿內容 (Pending Transcript Import)]'],
+        unmappedSpeakers: [],
+        uncertaintyFlags: [{ type: 'missing_transcript', lineOffset: 1, preview: '⚠️ [需人為確認 - 尚未匯入逐字稿內容]' }],
+        tokenStats: { estimatedFullOutputTokens: 0, mappingDictionaryTokens: 0, savedPercentage: 0 }
+      };
 
-  const mediaHeader = mediaMeta
-    ? `- **原始媒體檔案**：[${mediaMeta.fileName}](./media/${mediaMeta.fileName}) (${mediaMeta.sizeBytes} bytes)\n- **媒體 SHA-256**：\`${mediaMeta.sha256}\``
-    : '- **原始媒體檔案**：無外部影音檔（純文字紀錄）';
+  const mediaHeaderLines = mediaMeta
+    ? [
+        `- **原始媒體檔案**：[${mediaMeta.fileName}](./media/${mediaMeta.fileName}) (${mediaMeta.sizeBytes} bytes)`,
+        `- **媒體 SHA-256**：\`${mediaMeta.sha256}\``
+      ]
+    : ['- **原始媒體檔案**：無外部影音檔（純文字紀錄）'];
 
   const attendeeList = attendees.length > 0
     ? attendees.join(', ')
-    : (Object.values(mapping).length > 0 ? Object.values(mapping).join(', ') : '與會團隊');
+    : (Object.values(mapping).length > 0 ? Object.values(mapping).join(', ') : '待確認 (TBD)');
 
-  const transcriptMd = `# 01. 語者分離逐字稿 (${safeProject} - ${date})
+  const headerLines = [
+    `# 01. 語者分離逐字稿 (${safeProject} - ${cleanDate})`,
+    '',
+    `- **專案名稱**：${safeProject}`,
+    `- **會議日期**：${cleanDate}`,
+    `- **會議主題**：${title}`,
+    `- **與會者名單**：${attendeeList}`,
+    ...mediaHeaderLines,
+    '',
+    '## 逐字稿內容',
+    ''
+  ];
 
-- **專案名稱**：${safeProject}
-- **會議日期**：${date}
-- **會議主題**：${title}
-- **與會者名單**：${attendeeList}
-${mediaHeader}
-
-## 逐字稿內容
-
-${mapped.lines.join('\n')}
-`;
-  const transcriptPath = path.join(meetingDir, '01-transcript.md');
+  // Exact 1-based line number where the first content line starts
+  const firstContentLine = headerLines.length + 1;
+  const transcriptLines = [...headerLines, ...mapped.lines];
+  const transcriptTotalLines = transcriptLines.length;
+  const transcriptMd = transcriptLines.join('\n') + '\n';
   fs.writeFileSync(transcriptPath, transcriptMd, 'utf8');
 
-  const transcriptTotalLines = transcriptMd.replace(/\r?\n$/, '').split(/\r?\n/).length;
-  const firstContentLine = Math.min(11, transcriptTotalLines);
-
-  // 3. Create 02-summary.md with valid #Lx-Ly citation to 01-transcript.md
-  const summaryMd = `# 02. 會議摘要與重點決議 (${safeProject} - ${date})
+  // 6. Create 02-summary.md (only mark 🟢 if real transcript was provided and has no uncertainty; otherwise mark 🔴/⚠️!)
+  const summaryBadge = hasRealTranscript ? '🟢' : '🔴 ⚠️ [需人為確認 - 尚未匯入逐字稿]';
+  const summaryMd = `# 02. 會議摘要與重點決議 (${safeProject} - ${cleanDate})
 
 ## 執行摘要 (Executive Summary)
-- 🟢 本次會議針對 **${safeProject}**（${title}）進行進度同步與決議確認（來源：[01-transcript.md](./01-transcript.md#L${firstContentLine}-L${transcriptTotalLines})）。
+- ${summaryBadge} 本次會議針對 **${safeProject}**（${title}）進行紀錄整理（來源：[01-transcript.md](./01-transcript.md#L${firstContentLine}-L${transcriptTotalLines})）。
 
 ## 核心討論重點與決議 (Key Points & Decisions)
-- 🟢 **決議事項 1**：確認本次會議核心討論脈絡（來源：[01-transcript.md](./01-transcript.md#L${firstContentLine}-L${transcriptTotalLines})）。
+- ${summaryBadge} **討論事項 1**：詳見逐字稿原始對話紀錄（來源：[01-transcript.md](./01-transcript.md#L${firstContentLine}-L${transcriptTotalLines})）。
 `;
   const summaryPath = path.join(meetingDir, '02-summary.md');
-  if (!fs.existsSync(summaryPath)) {
+  if (!fs.existsSync(summaryPath) || force) {
     fs.writeFileSync(summaryPath, summaryMd, 'utf8');
   }
 
-  // 4. Create 03-todos-and-discussion.md with valid #Lx-Ly citations and Human-in-the-Loop section
+  // 7. Create 03-todos-and-discussion.md
   const uncertaintySection = mapped.uncertaintyFlags.length > 0
     ? mapped.uncertaintyFlags.map((u, idx) => `- 🚨 **[需人為確認 #${idx + 1}]** (${u.type}): \`${u.preview}\``).join('\n')
     : '- 無高不確定性待確認項目。';
 
-  const todosMd = `# 03. 待辦事項與會後延伸討論 (${safeProject} - ${date})
+  const todoRiskBadge = hasRealTranscript ? '🟡 待確認負責人 (TBD)' : '🔴 ⚠️ [需人為確認 - 無逐字稿來源]';
+
+  const todosMd = `# 03. 待辦事項與會後延伸討論 (${safeProject} - ${cleanDate})
 
 ## 待辦事項清單 (Action Items)
 
 | 編號 | 待辦事項 | 負責人 (Owner) | 期限 (Due Date) | 風險等級 | 來源引用 | 狀態 |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| AI-01 | 追蹤本次會議決議執行進度 | 待確認 (TBD) | 待確認 (TBD) | 🟢 已驗證事實 | [01-transcript.md](./01-transcript.md#L${firstContentLine}-L${transcriptTotalLines}) | ⏳ Pending |
+| AI-01 | 確認本次會議待辦事項與負責人 | 待確認 (TBD) | 待確認 (TBD) | ${todoRiskBadge} | [01-transcript.md](./01-transcript.md#L${firstContentLine}-L${transcriptTotalLines}) | ⏳ Pending |
 
 ## 🚨 需人為介入與風險確認清單 (Human Intervention Required)
 ${uncertaintySection}
@@ -231,11 +371,11 @@ ${uncertaintySection}
 - 可於此處與 AI 持續針對會議決議與待辦進行延伸討論並回寫紀錄。
 `;
   const todosPath = path.join(meetingDir, '03-todos-and-discussion.md');
-  if (!fs.existsSync(todosPath)) {
+  if (!fs.existsSync(todosPath) || force) {
     fs.writeFileSync(todosPath, todosMd, 'utf8');
   }
 
-  // 5. Ensure project-level index.md rolling snapshot exists and lists this meeting
+  // 8. Ensure project-level index.md rolling snapshot exists and lists this meeting
   const projectIndexPath = path.join(projectDir, 'index.md');
   if (!fs.existsSync(projectIndexPath)) {
     const projIndexMd = `# ${safeProject} — 專案會議總覽與滾動基準快照 (Project Rolling Snapshot)
@@ -256,7 +396,7 @@ ${uncertaintySection}
     }
   }
 
-  // 6. Create default sample template in meetings/<project>/templates/change-request.md if missing
+  // 9. Create default sample template in meetings/<project>/templates/change-request.md if missing
   const defaultTplPath = path.join(templatesDir, 'change-request.md');
   if (!fs.existsSync(defaultTplPath)) {
     fs.writeFileSync(
@@ -278,6 +418,8 @@ ${uncertaintySection}
     ok: true,
     projectDir,
     meetingDir,
+    firstContentLine,
+    transcriptTotalLines,
     mediaMeta,
     mapped
   };
@@ -285,8 +427,7 @@ ${uncertaintySection}
 
 /**
  * Generate a post-meeting deliverable from a template without hallucinating missing fields.
- * Any {{FIELD}} not provided in `values` is automatically marked with
- * `⚠️ [會議未提及 - 需人工補填: FIELD]` so zero unfilled `{{...}}` placeholders remain!
+ * Rejects boolean flags (e.g. --REQUESTER with no value) and path traversal in outputName.
  */
 function generateDeliverableFromTemplate({
   meetingDir,
@@ -294,23 +435,40 @@ function generateDeliverableFromTemplate({
   outputName = 'deliverable.md',
   values = {}
 } = {}) {
-  if (!fs.existsSync(templatePath)) {
-    return { ok: false, error: `Template not found: ${templatePath}` };
+  if (!outputName || typeof outputName !== 'string' || !isSafePathSegment(outputName)) {
+    return {
+      ok: false,
+      reason: 'invalid_output_name',
+      error: `Invalid deliverable output filename: "${outputName}"`
+    };
   }
+  if (!templatePath || typeof templatePath !== 'string' || !fs.existsSync(templatePath) || !fs.statSync(templatePath).isFile()) {
+    return { ok: false, reason: 'template_not_found', error: `Template not found: ${templatePath}` };
+  }
+
   const tplContent = fs.readFileSync(templatePath, 'utf8');
   const missingFields = [];
 
   const filledContent = tplContent.replace(/\{\{([A-Za-z0-9_.-]+)\}\}/g, (_, key) => {
-    if (Object.prototype.hasOwnProperty.call(values, key) && values[key] !== undefined && values[key] !== null && String(values[key]).trim() !== '') {
-      return String(values[key]);
+    const rawVal = Object.prototype.hasOwnProperty.call(values, key) ? values[key] : undefined;
+    // Reject boolean true/false from value-less CLI flags like --REQUESTER
+    if (typeof rawVal === 'string' && rawVal.trim() !== '') {
+      return rawVal.trim();
+    }
+    if (typeof rawVal === 'number' && !Number.isNaN(rawVal)) {
+      return String(rawVal);
     }
     missingFields.push(key);
     return `⚠️ [會議未提及 - 需人工補填: ${key}]`;
   });
 
-  const deliverablesDir = path.join(meetingDir, 'deliverables');
+  const deliverablesDir = path.resolve(meetingDir, 'deliverables');
   ensureDir(deliverablesDir);
-  const outPath = path.join(deliverablesDir, outputName);
+  const outPath = path.resolve(deliverablesDir, outputName);
+  if (!outPath.startsWith(deliverablesDir + path.sep)) {
+    return { ok: false, reason: 'invalid_output_name', error: 'Path traversal detected in outputName.' };
+  }
+
   fs.writeFileSync(outPath, filledContent, 'utf8');
 
   return {
@@ -321,8 +479,8 @@ function generateDeliverableFromTemplate({
 }
 
 /**
- * Extract key-value baseline facts (such as 上線日 / 預算 / 決議 / 負責人 / Launch Date / Budget)
- * from markdown files to deterministically detect cross-meeting conflicts.
+ * Extract both structured (`- **Key**: Value`) AND natural-language prose facts
+ * (such as 上線日 / 預算 / 負責人 / Launch Date / Budget) to detect cross-meeting conflicts.
  */
 function extractKeyFacts(mdContent, sourceLabel) {
   const facts = {};
@@ -340,18 +498,37 @@ function extractKeyFacts(mdContent, sourceLabel) {
     '管理 CLI'
   ]);
 
+  const normalizeFactKey = (k) => {
+    if (/上線日|launch\s*date/i.test(k)) return '預計上線日';
+    if (/預算|budget/i.test(k)) return '預算';
+    return k;
+  };
+
   for (let i = 0; i < lines.length; i++) {
-    const m = lines[i].match(factRegex);
+    const rawLine = lines[i];
+    const lineNum = i + 1;
+
+    // 1. Structured `- **Key**: Value`
+    const m = rawLine.match(factRegex);
     if (m) {
-      const key = m[1].trim();
-      const val = m[2].trim();
-      if (!ignoreKeys.has(key) && val && !val.startsWith('{{')) {
-        facts[key] = {
-          value: val,
-          line: i + 1,
-          source: sourceLabel
-        };
+      const rawKey = m[1].trim();
+      const val = m[2].replace(/\s*\(來源[:：].*?\)\s*$/, '').trim();
+      if (!ignoreKeys.has(rawKey) && val && !val.startsWith('{{')) {
+        const key = normalizeFactKey(rawKey);
+        facts[key] = { value: val, line: lineNum, source: sourceLabel };
       }
+    }
+
+    // 2. Natural-language prose: 上線日 / Launch Date (e.g. "上線日改為 12/15", "預計上線日定在 2026-12-01")
+    const launchMatch = rawLine.match(/(?:預計)?上線日(?:期)?(?:鎖定在|鎖定為|定在|定為|改為|延後到|延後至|延至|調整至|調整為|為|是|[:：]\s*)\s*([0-9]{4}[-/][0-9]{1,2}[-/][0-9]{1,2}|[0-9]{1,2}\/[0-9]{1,2}|[0-9]{1,2}月[0-9]{1,2}日)/);
+    if (launchMatch) {
+      facts['預計上線日'] = { value: launchMatch[1].trim(), line: lineNum, source: sourceLabel };
+    }
+
+    // 3. Natural-language prose: 預算 / Budget (e.g. "預算改為 60 萬", "預算定在 50 萬")
+    const budgetMatch = rawLine.match(/預算(?:金額|上限)?(?:鎖定在|鎖定為|定在|定為|改為|調整為|調整至|增加到|提高到|降為|為|是|[:：]\s*)\s*([0-9.,]+\s*(?:萬|億|元|k|K|M|USD|TWD|NTD)?)/);
+    if (budgetMatch) {
+      facts['預算'] = { value: budgetMatch[1].trim(), line: lineNum, source: sourceLabel };
     }
   }
   return facts;
@@ -360,6 +537,8 @@ function extractKeyFacts(mdContent, sourceLabel) {
 /**
  * Deterministically inspect a single meeting folder (Post-Creation Inspection Rule)
  * and check for cross-meeting conflicts against sibling meetings / index.md in the same project.
+ * Note: `ok` is true ONLY when structure is valid AND there are zero unresolved human-intervention
+ * items (⚠️ / 🚨 / SPEAKER_XX) AND zero unresolved cross-meeting conflicts (⚡).
  */
 function inspectMeetingDirectory(meetingDir) {
   const requiredFiles = ['01-transcript.md', '02-summary.md', '03-todos-and-discussion.md'];
@@ -395,6 +574,24 @@ function inspectMeetingDirectory(meetingDir) {
     }
   }
 
+  // Also scan deliverables/*.md for ⚠️ [會議未提及 - 需人工補填]
+  const deliverablesDir = path.join(meetingDir, 'deliverables');
+  if (fs.existsSync(deliverablesDir)) {
+    for (const df of fs.readdirSync(deliverablesDir)) {
+      if (!df.endsWith('.md')) continue;
+      const dLines = fs.readFileSync(path.join(deliverablesDir, df), 'utf8').split(/\r?\n/);
+      for (let i = 0; i < dLines.length; i++) {
+        if (/⚠️\s*\[(需人為確認|待確認語者|會議未提及)[^\]]*\]/.test(dLines[i])) {
+          humanInterventionItems.push({
+            file: `deliverables/${df}`,
+            line: i + 1,
+            text: dLines[i].trim()
+          });
+        }
+      }
+    }
+  }
+
   // Cross-meeting conflict check against earlier meetings and index.md in the same project folder
   const projectDir = path.dirname(meetingDir);
   const currentFolder = path.basename(meetingDir);
@@ -404,13 +601,11 @@ function inspectMeetingDirectory(meetingDir) {
     const currentFacts = extractKeyFacts(fs.readFileSync(currentSummaryPath, 'utf8'), `${currentFolder}/02-summary.md`);
     const baselineFacts = {};
 
-    // Read project index.md baseline
     const indexPath = path.join(projectDir, 'index.md');
     if (fs.existsSync(indexPath)) {
       Object.assign(baselineFacts, extractKeyFacts(fs.readFileSync(indexPath, 'utf8'), 'index.md'));
     }
 
-    // Read earlier sibling meeting folders sorted chronologically
     const siblings = fs.readdirSync(projectDir, { withFileTypes: true })
       .filter((d) => d.isDirectory() && d.name !== 'templates' && d.name < currentFolder)
       .map((d) => d.name)
@@ -436,8 +631,13 @@ function inspectMeetingDirectory(meetingDir) {
     }
   }
 
+  const structureOk = missingFiles.length === 0 && uncitedItems.length === 0;
+  const needsHumanReview = humanInterventionItems.length > 0 || conflicts.length > 0;
+
   return {
-    ok: missingFiles.length === 0 && uncitedItems.length === 0,
+    ok: structureOk && !needsHumanReview,
+    structureOk,
+    needsHumanReview,
     meetingDir,
     missingFiles,
     uncitedItems,
@@ -451,5 +651,6 @@ module.exports = {
   applySpeakerMapping,
   createMeeting,
   generateDeliverableFromTemplate,
+  extractKeyFacts,
   inspectMeetingDirectory
 };
