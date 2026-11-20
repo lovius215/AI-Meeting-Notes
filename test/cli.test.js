@@ -1836,3 +1836,86 @@ test('19. Parenthesized paths in Markdown #Lx-Ly refs and meetnotes sync-hash co
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('20. CLI command parity: every switch(cmd) group in bin/cli.js is documented in --help, READMEs, and SKILL.md', () => {
+  const repoRoot = path.join(__dirname, '..');
+  const cliSrc = fs.readFileSync(path.join(repoRoot, 'bin', 'cli.js'), 'utf8');
+  const { renderSkillMd, renderWorkspaceReadme } = require('../src/templates');
+
+  // Extract switch(cmd) case groups dynamically so any new CLI command added to bin/cli.js is checked automatically
+  const switchMatch = cliSrc.match(/switch\s*\(cmd\)\s*\{([\s\S]*?)\n\s*default:/);
+  assert.ok(switchMatch, 'Could not locate switch (cmd) in bin/cli.js');
+
+  const caseGroups = [];
+  let currentGroup = [];
+  for (const line of switchMatch[1].split(/\r?\n/)) {
+    const m = line.match(/^\s*case\s+'([^']+)'\s*:/);
+    if (m) {
+      currentGroup.push(m[1]);
+      if (line.includes('{')) {
+        caseGroups.push(currentGroup);
+        currentGroup = [];
+      }
+    }
+  }
+  assert.ok(caseGroups.length >= 10, `Expected at least 10 CLI command groups, found ${caseGroups.length}`);
+
+  // Capture --help output
+  let helpText = '';
+  const origLog = console.log;
+  console.log = (...args) => { helpText += args.join(' ') + '\n'; };
+  try {
+    main(['--help']);
+  } finally {
+    console.log = origLog;
+  }
+
+  const readmeFiles = ['readme.md', 'README.zh-TW.md', 'README.zh-CN.md', 'README.en.md'];
+  const readmeContents = readmeFiles.map((f) => ({
+    file: f,
+    text: fs.readFileSync(path.join(repoRoot, f), 'utf8')
+  }));
+
+  for (const group of caseGroups) {
+    assert.equal(
+      group.some((name) => helpText.includes(name)),
+      true,
+      `CLI command group [${group.join(', ')}] is missing from printHelp() in bin/cli.js`
+    );
+    for (const { file, text } of readmeContents) {
+      assert.equal(
+        group.some((name) => text.includes(name)),
+        true,
+        `CLI command group [${group.join(', ')}] is missing from ${file}`
+      );
+    }
+  }
+
+  // Meeting-workflow commands must also be present in conversational SKILL.md and ja/ko READMEs + templates
+  const meetingCommands = ['new-meeting', 'sync-hash', 'inspect', 'verify', 'pdf', 'commit'];
+  const skillMd = renderSkillMd({ lang: 'zh-TW', mode: 'conversational', cliName: 'meetnotes', pkgName: '@loviusc/ai-meeting-notes' });
+  for (const cmdName of meetingCommands) {
+    assert.equal(
+      skillMd.includes(cmdName),
+      true,
+      `Meeting command "${cmdName}" is missing from conversational SKILL.md in src/templates.js`
+    );
+  }
+
+  const jaKoFiles = ['README.ja.md', 'README.ko.md'];
+  for (const f of jaKoFiles) {
+    const txt = fs.readFileSync(path.join(repoRoot, f), 'utf8');
+    for (const cmdName of ['verify', 'inspect', 'sync-hash', 'pdf', 'commit']) {
+      assert.equal(txt.includes(cmdName), true, `Command "${cmdName}" is missing from ${f}`);
+    }
+  }
+
+  for (const lang of ['zh-TW', 'zh-CN', 'en', 'ja', 'ko']) {
+    const tplReadme = renderWorkspaceReadme({ lang, mode: 'conversational' });
+    assert.equal(
+      tplReadme.includes('sync-hash'),
+      true,
+      `Generated ${lang} README template in src/templates.js is missing sync-hash`
+    );
+  }
+});
