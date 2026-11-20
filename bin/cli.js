@@ -44,13 +44,14 @@ Standard Commands:
       0-Token Markdown to A4 PDF export via local Headless Chrome/Edge, wkhtmltopdf, or macOS cupsfilter
 
   upgrade [--dry-run]                                 (alias: update)
-      Non-destructively updates .${CLI_NAME}/{AGENTS.md,skills/,rules/} (preserving language & <claude-mem-context>)
+      Updates .${CLI_NAME}/{AGENTS.md,skills/,rules/} template body (preserving language, <claude-mem-context> & user sections appended at end of file; saves .bak if modified in-place)
 
   status | check | doctor [--self]
       Displays project stage progress, workspace file integrity, and environment health
 
-  new-meeting | meeting [project] [title] [--date YYYY-MM-DD] [--transcript <file>] [--media <file>] [--map "SPEAKER_00=Name"] [--empty] [--force]
+  new-meeting | meeting [project] [title] [--date YYYY-MM-DD] [--transcript <file>] [--media <file>] [--map "SPEAKER_00=Name"] [--empty] [--force] [--force-all]
       Deterministically creates a meeting folder under meetings/<project>/<date>_<title>/ with SHA-256 media hashing & 0-Token speaker batch replacement
+      (--empty creates an unverified ⚠️ skeleton; --force regenerates 01-transcript.md with .bak backup while preserving 02/03; --force-all regenerates 01~03 with .bak backups)
 
   inspect [meetingDir]
       Runs the 7-dimension Post-Creation Inspection Rule (returns non-zero if files/citations are missing or if 🚨 Human-in-the-Loop / ⚡ Cross-Meeting Conflicts require review)
@@ -160,7 +161,8 @@ function main(argv = process.argv.slice(2)) {
         transcriptText: typeof flags.text === 'string' ? flags.text : '',
         mapping,
         allowEmpty: Boolean(flags.empty),
-        force: Boolean(flags.force)
+        force: Boolean(flags.force),
+        forceAll: Boolean(flags['force-all'] || flags.forceAll)
       });
       if (!res.ok) {
         console.error(`⛔ ${res.error}`);

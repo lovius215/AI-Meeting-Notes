@@ -41,7 +41,7 @@
 | :--- | :--- |
 | **1. 多元輸入與語者分離 (`Speaker Diarization`)** | 支援文字筆記、錄音檔、錄影檔與外部字幕初稿，自動區分並實名標註每位發言者（`[HH:MM:SS] 發言人：內容`）。 |
 | **2. 週期性「專案 -> 日期」雙層歸檔與三檔分離** | 以 `meetings/<專案主題>/<YYYY-MM-DD_會議名稱>/` 組織歷次會議，每次固定產出 `01-transcript.md`（逐字稿）、`02-summary.md`（摘要重點與決議）、`03-todos-and-discussion.md`（待辦事項與會後討論區）。 |
-| **3. 跨場次歷史會議衝突偵測 (`Conflict Alert`)** | 整理新會議時自動比對同專案之前的會議紀錄；若發現決議翻盤、上線時程或預算數字矛盾、負責人變動，主動以「本次 `#Lx-Ly` vs. 前次日期 `#Lx-Ly`」雙邊溯源提醒。 |
+| **3. 跨場次歷史會議衝突偵測 (`Conflict Alert`)** | 整理新會議時自動比對同專案 `index.md` 與前次摘要；原生支援任意結構化 `- **欄位名**：值` 以及 5 語系自然語言散文之 **預計上線日（Launch Date）、預算（Budget）、負責人（Owner）** 變更偵測（如「預算 50 萬→改為 60 萬」、「負責人王經理→改由李工程師」），主動以雙邊 `#Lx-Ly` 溯源提醒。 |
 | **4. 會後衍生文件與範本套用 (`Deliverables & Templates`)** | 支援根據會議結論與 `meetings/<專案>/templates/` 範本（如變更單、`PRD`、客戶確認信）自動產出文件至 `deliverables/`；**範本中未於會議提及之欄位強制標記 `⚠️ [會議未提及 - 需人工補填]`**。 |
 | **5. 完稿後七維度強制檢核 `Rule`** | 每次所有會議文件建立或更新後，強制觸發隱藏的 `post-meeting-inspection.md` 檢核規則，自動檢查結構純淨度、語者完整度、`#Lx-Ly` 行號真實性、高風險不確定項與跨期衝突，並輸出檢核報告。 |
 | **6. 0-Token 防幻覺驗證與 `A4 PDF / HTML` 匯出** | 內建 0-Token `meetnotes verify` 實體行號校驗、`meetnotes pdf --merge` 高品質 A4 PDF / HTML 報表匯出與 `meetnotes commit` 安全 Git 歸檔。 |
@@ -183,10 +183,10 @@ my-meetings-workspace/
 | `meetnotes verify [目標目錄或檔案]` | **0-Token 防幻覺檢查**：檢查 `meetings/` 或 `project/` 下是否有未填佔位符與無效的 `#Lx-Ly` 行號引用 |
 | `meetnotes pdf [目標] [--merge] [--html] [--output <file.pdf>]` | 別名 `md2pdf`；0-Token 將會議紀錄合併匯出為高品質 A4 PDF 或 HTML 報告 |
 | `meetnotes commit [目標] [-m <訊息>]` | 先跑 `verify` -> 安全 Git 歸檔（自動排除敏感檔與影音大檔，遇衝突安全停止） |
-| `meetnotes upgrade [--dry-run]` | 別名 `update`；保留現有語言與 `<claude-mem-context>` 無損升級隱藏規則庫 |
+| `meetnotes upgrade [--dry-run]` | 別名 `update`；更新內建規則模板（保留鎖定語言、`<claude-mem-context>` 與附加於檔尾的客製化段落；若曾修改內文會自動存 `.bak` 備份） |
 | `meetnotes status` / `check` / `doctor` | 查看進度統計、核心檔案檢查與系統環境完整性診斷 |
-| `meetnotes new-meeting <專案> <主題> --transcript <file> [--media <file>]` | 確定性建立會議目錄、計算媒體 `SHA-256` 並執行 0-Token 語者批次替換 |
-| `meetnotes inspect <會議目錄>` | 執行完稿強制檢核 Rule（若含未確認 `🚨` 或跨期衝突 `⚡` 則回傳非 0 狀態碼提醒人工裁示） |
+| `meetnotes new-meeting <專案> <主題> --transcript <file> [--media <file>] [--empty] [--force] [--force-all]` | 確定性建立會議目錄、計算媒體 `SHA-256` 並執行 0-Token 語者批次替換（`--empty` 建立待確認 `⚠️` 骨架；`--force` 僅重寫 `01-transcript.md` 並存 `.bak` 備份，保留人工編修之 `02/03`；`--force-all` 重寫 `01~03` 並存 `.bak`） |
+| `meetnotes inspect <會議目錄>` | 執行完稿強制檢核 Rule（支援結構化 `- **鍵**：值` 與自然語言 **預計上線日／預算／負責人** 跨期衝突偵測；若含未確認 `🚨` 或跨期衝突 `⚡` 則回傳非 0 狀態碼） |
 | `meetnotes deliverable --meeting <dir> --template <file> [--out <file>]` | 套用範本產出會後衍生文件至 `deliverables/`，未提及欄位自動標記 `⚠️ [會議未提及 - 需人工補填]` |
 
 ---

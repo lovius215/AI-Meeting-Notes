@@ -101,6 +101,9 @@ function markdownToHtmlBody(md) {
   const closeListStack = () => {
     while (listStack.length > 0) {
       const popped = listStack.pop();
+      if (popped.hasOpenLi) {
+        html.push('</li>');
+      }
       html.push(`</${popped.type}>`);
     }
   };
@@ -199,7 +202,7 @@ function markdownToHtmlBody(md) {
       continue;
     }
 
-    // List items (supports ordered <ol>, unordered <ul>, and nested indentation)
+    // List items (supports ordered <ol>, unordered <ul>, and W3C-compliant nested <li>...<ul><li>...</li></ul></li>)
     const listMatch = raw.match(/^(\s*)([-*+]|\d+\.)\s+(.*)$/);
     if (listMatch) {
       const indent = listMatch[1].replace(/\t/g, '  ').length;
@@ -208,20 +211,29 @@ function markdownToHtmlBody(md) {
 
       while (listStack.length > 0 && indent < listStack[listStack.length - 1].indent) {
         const popped = listStack.pop();
+        if (popped.hasOpenLi) {
+          html.push('</li>');
+        }
         html.push(`</${popped.type}>`);
       }
 
       if (listStack.length === 0 || indent > listStack[listStack.length - 1].indent) {
-        listStack.push({ type: listType, indent });
+        listStack.push({ type: listType, indent, hasOpenLi: false });
         html.push(`<${listType}>`);
       } else if (listStack[listStack.length - 1].type !== listType) {
         const popped = listStack.pop();
+        if (popped.hasOpenLi) {
+          html.push('</li>');
+        }
         html.push(`</${popped.type}>`);
-        listStack.push({ type: listType, indent });
+        listStack.push({ type: listType, indent, hasOpenLi: false });
         html.push(`<${listType}>`);
+      } else if (listStack[listStack.length - 1].hasOpenLi) {
+        html.push('</li>');
       }
 
-      html.push(`<li>${formatInlineMarkdown(itemContent)}</li>`);
+      html.push(`<li>${formatInlineMarkdown(itemContent)}`);
+      listStack[listStack.length - 1].hasOpenLi = true;
       continue;
     }
 

@@ -120,7 +120,7 @@ function runInit({ cwd = process.cwd(), flags = {} } = {}) {
       : (fs.existsSync(legacyAgentsPath) ? extractClaudeMemContext(fs.readFileSync(legacyAgentsPath, 'utf8')) : null);
 
     let customAppendedSuffix = '';
-    if (existingAgentsRaw && existingCfg && !flags.force) {
+    if (existingAgentsRaw && existingCfg) {
       const oldDefault = renderAgentsMd({
         lang: existingCfg.lang,
         mode: existingCfg.mode,
@@ -128,7 +128,12 @@ function runInit({ cwd = process.cwd(), flags = {} } = {}) {
         pkgName: PACKAGE_NAME,
         memContext: existingMem
       });
-      customAppendedSuffix = extractCustomTail(existingAgentsRaw, oldDefault);
+      if (!flags.force) {
+        customAppendedSuffix = extractCustomTail(existingAgentsRaw, oldDefault);
+      }
+      if (existingAgentsRaw !== oldDefault) {
+        fs.writeFileSync(`${agentsPath}.bak`, existingAgentsRaw, 'utf8');
+      }
     }
 
     const agentsContent = renderAgentsMd({
@@ -150,21 +155,26 @@ function runInit({ cwd = process.cwd(), flags = {} } = {}) {
     }
   }
 
-  // 3. Create .<cli>/skills/<cli>/SKILL.md (protected unless --force or --lang/--mode changed; preserves user-appended custom sections)
+  // 3. Create .<cli>/skills/<cli>/SKILL.md (protected unless --force or --lang/--mode changed; preserves user-appended custom sections & saves .bak)
   const skillDir = path.join(cwd, HIDDEN_DIR, 'skills', CLI_NAME);
   ensureDir(skillDir);
   const skillPath = path.join(skillDir, 'SKILL.md');
   if (!fs.existsSync(skillPath) || shouldRefreshTemplates) {
     const existingSkillRaw = fs.existsSync(skillPath) ? fs.readFileSync(skillPath, 'utf8') : null;
     let customSkillSuffix = '';
-    if (existingSkillRaw && existingCfg && !flags.force) {
+    if (existingSkillRaw && existingCfg) {
       const oldDefaultSkill = renderSkillMd({
         lang: existingCfg.lang,
         mode: existingCfg.mode,
         cliName: CLI_NAME,
         pkgName: PACKAGE_NAME
       });
-      customSkillSuffix = extractCustomTail(existingSkillRaw, oldDefaultSkill);
+      if (!flags.force) {
+        customSkillSuffix = extractCustomTail(existingSkillRaw, oldDefaultSkill);
+      }
+      if (existingSkillRaw !== oldDefaultSkill) {
+        fs.writeFileSync(`${skillPath}.bak`, existingSkillRaw, 'utf8');
+      }
     }
     fs.writeFileSync(
       skillPath,

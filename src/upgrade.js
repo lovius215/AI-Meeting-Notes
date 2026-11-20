@@ -99,6 +99,9 @@ function runUpgrade({ cwd = process.cwd(), flags = {} } = {}) {
   actions.push({ type: 'update', file: `${targetHiddenDir}/AGENTS.md`, preservedMem: Boolean(existingMem) });
   if (!isDryRun) {
     ensureDir(hiddenRoot);
+    if (existingAgentsRaw && existingAgentsRaw !== newAgentsContent) {
+      fs.writeFileSync(`${agentsPath}.bak`, existingAgentsRaw, 'utf8');
+    }
     fs.writeFileSync(agentsPath, newAgentsContent, 'utf8');
   }
 
@@ -112,12 +115,16 @@ function runUpgrade({ cwd = process.cwd(), flags = {} } = {}) {
   if (existingSkillRaw && !flags.force) {
     customSkillSuffix = extractCustomTail(existingSkillRaw, baseSkillContent);
   }
+  const newSkillContent = baseSkillContent + customSkillSuffix;
   actions.push({ type: 'update', file: skillRel });
   if (!isDryRun) {
     ensureDir(skillDir);
+    if (existingSkillRaw && existingSkillRaw !== newSkillContent) {
+      fs.writeFileSync(`${skillPath}.bak`, existingSkillRaw, 'utf8');
+    }
     fs.writeFileSync(
       skillPath,
-      baseSkillContent + customSkillSuffix,
+      newSkillContent,
       'utf8'
     );
   }

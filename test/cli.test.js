@@ -660,7 +660,8 @@ test('11. comprehensive fixes: 5-lang meeting rules, safe upgrade/re-init, recur
     '| a \\| b | c |'
   ].join('\n');
   const renderedHtml = markdownToHtmlBody(sampleMd);
-  assert.match(renderedHtml, /<ol>\s*<li>First ordered<\/li>\s*<li>Second ordered<\/li>\s*<ul>\s*<li>Nested bullet<\/li>\s*<\/ul>\s*<\/ol>\s*<p>Paragraph right after list<\/p>/);
+  assert.match(renderedHtml, /<ol>\s*<li>First ordered\s*<\/li>\s*<li>Second ordered\s*<ul>\s*<li>Nested bullet\s*<\/li>\s*<\/ul>\s*<\/li>\s*<\/ol>\s*<p>Paragraph right after list<\/p>/);
+  assert.doesNotMatch(renderedHtml, /<\/li>\s*<ul>/);
   assert.match(renderedHtml, /<code>\*b\*<\/code>/);
   assert.doesNotMatch(renderedHtml, /<code><em>b<\/em><\/code>/);
   assert.match(renderedHtml, /<a href="#">click<\/a>/);
@@ -1283,6 +1284,64 @@ test('17. all-in-one final audit: clean conversational init (0 verify errors, no
     assert.match(advHtml, /<td><code>--lang zh-TW\|en\|ja<\/code><\/td>\s*<td>Language option<\/td>/);
     assert.match(advHtml, /<a href="https:\/\/web\.archive\.org\/web\/\*\/https:\/\/example\.com\/\*">Wayback \* Archive<\/a>/);
     assert.doesNotMatch(advHtml, /javascript:/i);
+
+    // 17h. Calendar date validation: 2026-02-31, 2026-02-29 (non-leap), and 2026-13-45 MUST be rejected
+    assert.equal(createMeeting({ cwd: tmpDir, project: 'A專案', title: 'BadDate1', date: '2026-02-31', transcriptText: 'hi' }).reason, 'invalid_date');
+    assert.equal(createMeeting({ cwd: tmpDir, project: 'A專案', title: 'BadDate2', date: '2026-02-29', transcriptText: 'hi' }).reason, 'invalid_date');
+    assert.equal(createMeeting({ cwd: tmpDir, project: 'A專案', title: 'BadDate3', date: '2026-13-45', transcriptText: 'hi' }).reason, 'invalid_date');
+
+    // 17i. Real extracted summary bullets + --force only overwrites 01-transcript.md (saving .bak) while preserving 02 & 03
+    const mForce1 = createMeeting({
+      cwd: tmpDir,
+      project: 'ForceProj',
+      title: 'Sync1',
+      date: '2026-11-10',
+      transcriptText: '[00:00:10] **王經理**：這次預算 50 萬，負責人王經理。'
+    });
+    assert.equal(mForce1.ok, true);
+    const initialSum1 = fs.readFileSync(path.join(mForce1.meetingDir, '02-summary.md'), 'utf8');
+    // Verify 02-summary.md extracted the actual statement with exact single-line citation #L11
+    assert.match(initialSum1, /這次預算 50 萬，負責人王經理。.*#L11\)/);
+
+    // Human edits 01-transcript.md, 02-summary.md, and 03-todos-and-discussion.md
+    fs.appendFileSync(path.join(mForce1.meetingDir, '01-transcript.md'), '\n# OLD_TRANSCRIPT_EDIT\n', 'utf8');
+    fs.appendFileSync(path.join(mForce1.meetingDir, '02-summary.md'), '\n# HUMAN_SUMMARY_EDIT_KEEP_ME\n', 'utf8');
+    fs.appendFileSync(path.join(mForce1.meetingDir, '03-todos-and-discussion.md'), '\n# HUMAN_TODOS_EDIT_KEEP_ME\n', 'utf8');
+
+    // Re-run with force: true -> 01-transcript.md is updated, 01-transcript.md.bak is saved, and 02 & 03 are PRESERVED!
+    const mForceRerun = createMeeting({
+      cwd: tmpDir,
+      project: 'ForceProj',
+      title: 'Sync1',
+      date: '2026-11-10',
+      transcriptText: '[00:00:10] **王經理**：修正後預算 50 萬，負責人王經理。',
+      force: true
+    });
+    assert.equal(mForceRerun.ok, true);
+    assert.equal(fs.existsSync(path.join(mForce1.meetingDir, '01-transcript.md.bak')), true);
+    assert.match(fs.readFileSync(path.join(mForce1.meetingDir, '01-transcript.md.bak'), 'utf8'), /OLD_TRANSCRIPT_EDIT/);
+    assert.match(fs.readFileSync(path.join(mForce1.meetingDir, '02-summary.md'), 'utf8'), /HUMAN_SUMMARY_EDIT_KEEP_ME/);
+    assert.match(fs.readFileSync(path.join(mForce1.meetingDir, '03-todos-and-discussion.md'), 'utf8'), /HUMAN_TODOS_EDIT_KEEP_ME/);
+
+    // 17j. Natural-language conflict detection for "預算 50 萬→改為 60 萬" and "負責人王經理→改由李工程師"
+    const mForce2 = createMeeting({
+      cwd: tmpDir,
+      project: 'ForceProj',
+      title: 'Sync2',
+      date: '2026-11-17',
+      transcriptText: '[00:01:00] **王經理**：今天決議預算 50 萬→改為 60 萬，負責人王經理→改由李工程師。'
+    });
+    assert.equal(mForce2.ok, true);
+    const conflictCheck = inspectMeetingDirectory(mForce2.meetingDir);
+    assert.equal(conflictCheck.conflicts.some((c) => c.key === '預算' && c.previousValue === '50 萬' && c.currentValue === '60 萬'), true);
+    assert.equal(conflictCheck.conflicts.some((c) => c.key === '負責人' && c.previousValue === '王經理' && c.currentValue === '李工程師'), true);
+
+    // 17k. In-middle edits to .meetnotes/AGENTS.md are backed up to AGENTS.md.bak on upgrade
+    const agentsPath = path.join(tmpDir, HIDDEN_DIR, 'AGENTS.md');
+    fs.writeFileSync(agentsPath, '# Custom In-Middle Edited AGENTS.md\nMiddle content changed.\n', 'utf8');
+    runUpgrade({ cwd: tmpDir });
+    assert.equal(fs.existsSync(`${agentsPath}.bak`), true);
+    assert.match(fs.readFileSync(`${agentsPath}.bak`, 'utf8'), /Custom In-Middle Edited AGENTS\.md/);
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

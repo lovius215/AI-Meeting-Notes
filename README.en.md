@@ -111,9 +111,10 @@ After running `meetnotes init`, end users **never need to type CLI commands** or
 | `meetnotes verify [target]` | **0-Token Anti-Hallucination Check**: detects unfilled `{{...}}` placeholders and validates `#Lx-Ly` transcript citations |
 | `meetnotes pdf [target] [--merge] [--html] [--output <file>]` | 0-Token export of meeting notes or specs to A4 PDF or HTML |
 | `meetnotes commit [target] [-m <msg>]` | Pre-commit `verify` -> safe Git archive (excludes sensitive files & large media, stops safely on merge conflicts) |
+| `meetnotes upgrade [--dry-run]` | Refresh built-in rule templates (preserves locked language, `<claude-mem-context>` & custom sections appended at end of file; saves `.bak` backup if modified in-place) |
 | `meetnotes status` / `check` / `doctor` | Display progress statistics, file integrity checks, and environment diagnostics |
-| `meetnotes new-meeting <project> <title> --transcript <file> [--media <file>]` | Deterministically create meeting folder, compute media `SHA-256`, and run 0-Token speaker batch replacement |
-| `meetnotes inspect <meetingDir>` | Run Post-Creation Inspection Rule (exits non-zero if `🚨` uncertainty or `⚡` cross-meeting conflicts need human review) |
+| `meetnotes new-meeting <project> <title> --transcript <file> [--media <file>] [--empty] [--force] [--force-all]` | Deterministically create meeting folder, compute media `SHA-256`, and run 0-Token speaker batch replacement (`--empty` creates unverified `⚠️` skeleton; `--force` only overwrites `01` with `.bak` backup; `--force-all` overwrites `01~03` with `.bak`) |
+| `meetnotes inspect <meetingDir>` | Run Post-Creation Inspection Rule (detects cross-meeting conflicts on any `- **Key**: Value` field and natural-language **Launch Date / Budget / Owner**; exits non-zero on `🚨` or `⚡`) |
 | `meetnotes deliverable --meeting <dir> --template <file> [--out <file>]` | Generate template deliverable in `deliverables/`, flagging missing fields with `⚠️ [會議未提及 - 需人工補填]` |
 
 ---

@@ -853,9 +853,10 @@ ${isConv
 | \`${cliName} verify [目标]\` | **0-Token 防幻觉检查**：检查未填 \`{{...}}\` 占位符与 \`#Lx-Ly\` 逐字稿行号引用真实性 |
 | \`${cliName} pdf [目标] [--merge] [--html] [--output <file>]\` | 0-Token 将会议记录或规格合并导出为高品质 A4 PDF 或 HTML |
 | \`${cliName} commit [目标] [-m <消息>]\` | 先跑 \`verify\` -> 安全 Git 归档（自动排除敏感档与影音大档，遇冲突安全停止） |
+| \`${cliName} upgrade [--dry-run]\` | 更新内建规则模板（保留锁定语言、\`<claude-mem-context>\` 与附加于档尾的客制段落；若修改过内文会自动存 \`.bak\` 备份） |
 | \`${cliName} status\` / \`check\` / \`doctor\` | 查看进度统计、核心文件检查与环境完整性诊断 |
-| \`${cliName} new-meeting <专案> <主题> --transcript <file> [--media <file>]\` | 确定性建立会议目录、计算媒体 \`SHA-256\` 并执行 0-Token 语者批次替换 |
-| \`${cliName} inspect <会议目录>\` | 执行完稿强制检核 Rule（若含未确认 \`🚨\` 或跨期冲突 \`⚡\` 则回传非 0 状态码提醒人工裁示） |
+| \`${cliName} new-meeting <专案> <主题> --transcript <file> [--media <file>] [--empty] [--force] [--force-all]\` | 确定性建立会议目录、计算媒体 \`SHA-256\` 并执行 0-Token 语者批次替换（\`--empty\` 建立待确认骨架；\`--force\` 仅重写 \`01\` 并备份 \`.bak\`；\`--force-all\` 重写 \`01~03\` 并备份 \`.bak\`） |
+| \`${cliName} inspect <会议目录>\` | 执行完稿强制检核 Rule（支援结构化 \`- **键**：值\` 与自然语言 **上线日/预算/负责人** 跨期冲突侦测；若含 \`🚨\` 或 \`⚡\` 则回传非 0 状态码） |
 | \`${cliName} deliverable --meeting <dir> --template <file> [--out <file>]\` | 套用范本产出会后衍生文档至 \`deliverables/\`，未提及栏位自动标记 \`⚠️ [會議未提及 - 需人工補填]\` |
 
 ---
@@ -1012,9 +1013,10 @@ Supports \`tool:init (gti) -> tool:propose (gtp) -> tool:analyze (gta) -> tool:s
 | \`${cliName} verify [target]\` | **0-Token Anti-Hallucination Check**: detects unfilled \`{{...}}\` placeholders and validates \`#Lx-Ly\` transcript citations |
 | \`${cliName} pdf [target] [--merge] [--html] [--output <file>]\` | 0-Token export of meeting notes or specs to A4 PDF or HTML |
 | \`${cliName} commit [target] [-m <msg>]\` | Pre-commit \`verify\` -> safe Git archive (excludes sensitive files & large media, stops safely on merge conflicts) |
+| \`${cliName} upgrade [--dry-run]\` | Refresh built-in rule templates (preserves locked language, \`<claude-mem-context>\` & custom sections appended at end of file; saves \`.bak\` backup if modified in-place) |
 | \`${cliName} status\` / \`check\` / \`doctor\` | Display progress statistics, file integrity checks, and environment diagnostics |
-| \`${cliName} new-meeting <project> <title> --transcript <file> [--media <file>]\` | Deterministically create meeting folder, compute media \`SHA-256\`, and run 0-Token speaker batch replacement |
-| \`${cliName} inspect <meetingDir>\` | Run Post-Creation Inspection Rule (exits non-zero if \`🚨\` uncertainty or \`⚡\` cross-meeting conflicts need human review) |
+| \`${cliName} new-meeting <project> <title> --transcript <file> [--media <file>] [--empty] [--force] [--force-all]\` | Deterministically create meeting folder, compute media \`SHA-256\`, and run 0-Token speaker batch replacement (\`--empty\` creates unverified \`⚠️\` skeleton; \`--force\` only overwrites \`01\` with \`.bak\` backup; \`--force-all\` overwrites \`01~03\` with \`.bak\`) |
+| \`${cliName} inspect <meetingDir>\` | Run Post-Creation Inspection Rule (detects cross-meeting conflicts on any \`- **Key**: Value\` field and natural-language **Launch Date / Budget / Owner**; exits non-zero on \`🚨\` or \`⚡\`) |
 | \`${cliName} deliverable --meeting <dir> --template <file> [--out <file>]\` | Generate template deliverable in \`deliverables/\`, flagging missing fields with \`⚠️ [會議未提及 - 需人工補填]\` |
 
 ---
@@ -1264,7 +1266,7 @@ ${navBar}
 | :--- | :--- |
 | **1. 多元輸入與語者分離 (\`Speaker Diarization\`)** | 支援文字筆記、錄音檔、錄影檔與外部字幕初稿，自動區分並實名標註每位發言者（\`[HH:MM:SS] 發言人：內容\`）。 |
 | **2. 週期性「專案 -> 日期」雙層歸檔與三檔分離** | 以 \`meetings/<專案主題>/<YYYY-MM-DD_會議名稱>/\` 組織歷次會議，每次固定產出 \`01-transcript.md\`（逐字稿）、\`02-summary.md\`（摘要重點與決議）、\`03-todos-and-discussion.md\`（待辦事項與會後討論區）。 |
-| **3. 跨場次歷史會議衝突偵測 (\`Conflict Alert\`)** | 整理新會議時自動比對同專案之前的會議紀錄；若發現決議翻盤、上線時程或預算數字矛盾、負責人變動，主動以「本次 \`#Lx-Ly\` vs. 前次日期 \`#Lx-Ly\`」雙邊溯源提醒。 |
+| **3. 跨場次歷史會議衝突偵測 (\`Conflict Alert\`)** | 整理新會議時自動比對同專案 \`index.md\` 與前次摘要；原生支援任意結構化 \`- **欄位名**：值\` 以及 5 語系自然語言散文之 **預計上線日（Launch Date）、預算（Budget）、負責人（Owner）** 變更偵測（如「預算 50 萬→改為 60 萬」、「負責人王經理→改由李工程師」），主動以雙邊 \`#Lx-Ly\` 溯源提醒。 |
 | **4. 會後衍生文件與範本套用 (\`Deliverables & Templates\`)** | 支援根據會議結論與 \`meetings/<專案>/templates/\` 範本（如變更單、\`PRD\`、客戶確認信）自動產出文件至 \`deliverables/\`；**範本中未於會議提及之欄位強制標記 \`⚠️ [會議未提及 - 需人工補填]\`**。 |
 | **5. 完稿後七維度強制檢核 \`Rule\`** | 每次所有會議文件建立或更新後，強制觸發隱藏的 \`post-meeting-inspection.md\` 檢核規則，自動檢查結構純淨度、語者完整度、\`#Lx-Ly\` 行號真實性、高風險不確定項與跨期衝突，並輸出檢核報告。 |
 | **6. 0-Token 防幻覺驗證與 \`A4 PDF / HTML\` 匯出** | 內建 0-Token \`${cliName} verify\` 實體行號校驗、\`${cliName} pdf --merge\` 高品質 A4 PDF / HTML 報表匯出與 \`${cliName} commit\` 安全 Git 歸檔。 |
@@ -1409,10 +1411,10 @@ ${isConv
 | \`${cliName} verify [目標目錄或檔案]\` | **0-Token 防幻覺檢查**：檢查 \`meetings/\` 或 \`project/\` 下是否有未填佔位符與無效的 \`#Lx-Ly\` 行號引用 |
 | \`${cliName} pdf [目標] [--merge] [--html] [--output <file.pdf>]\` | 別名 \`md2pdf\`；0-Token 將會議紀錄合併匯出為高品質 A4 PDF 或 HTML 報告 |
 | \`${cliName} commit [目標] [-m <訊息>]\` | 先跑 \`verify\` -> 安全 Git 歸檔（自動排除敏感檔與影音大檔，遇衝突安全停止） |
-| \`${cliName} upgrade [--dry-run]\` | 別名 \`update\`；保留現有語言與 \`<claude-mem-context>\` 無損升級隱藏規則庫 |
+| \`${cliName} upgrade [--dry-run]\` | 別名 \`update\`；更新內建規則模板（保留鎖定語言、\`<claude-mem-context>\` 與附加於檔尾的客製化段落；若曾修改內文會自動存 \`.bak\` 備份） |
 | \`${cliName} status\` / \`check\` / \`doctor\` | 查看進度統計、核心檔案檢查與系統環境完整性診斷 |
-| \`${cliName} new-meeting <專案> <主題> --transcript <file> [--media <file>]\` | 確定性建立會議目錄、計算媒體 \`SHA-256\` 並執行 0-Token 語者批次替換 |
-| \`${cliName} inspect <會議目錄>\` | 執行完稿強制檢核 Rule（若含未確認 \`🚨\` 或跨期衝突 \`⚡\` 則回傳非 0 狀態碼提醒人工裁示） |
+| \`${cliName} new-meeting <專案> <主題> --transcript <file> [--media <file>] [--empty] [--force] [--force-all]\` | 確定性建立會議目錄、計算媒體 \`SHA-256\` 並執行 0-Token 語者批次替換（\`--empty\` 建立待確認 \`⚠️\` 骨架；\`--force\` 僅重寫 \`01-transcript.md\` 並存 \`.bak\` 備份，保留人工編修之 \`02/03\`；\`--force-all\` 重寫 \`01~03\` 並存 \`.bak\`） |
+| \`${cliName} inspect <會議目錄>\` | 執行完稿強制檢核 Rule（支援結構化 \`- **鍵**：值\` 與自然語言 **預計上線日／預算／負責人** 跨期衝突偵測；若含未確認 \`🚨\` 或跨期衝突 \`⚡\` 則回傳非 0 狀態碼） |
 | \`${cliName} deliverable --meeting <dir> --template <file> [--out <file>]\` | 套用範本產出會後衍生文件至 \`deliverables/\`，未提及欄位自動標記 \`⚠️ [會議未提及 - 需人工補填]\` |
 
 ---

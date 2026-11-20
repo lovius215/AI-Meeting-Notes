@@ -209,6 +209,20 @@ function isSafePathSegment(seg) {
   return true;
 }
 
+function isValidCalendarDate(dateStr) {
+  if (typeof dateStr !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr.trim())) {
+    return false;
+  }
+  const [y, m, d] = dateStr.trim().split('-').map((n) => parseInt(n, 10));
+  if (m < 1 || m > 12 || d < 1 || d > 31) return false;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return (
+    dt.getUTCFullYear() === y &&
+    dt.getUTCMonth() === m - 1 &&
+    dt.getUTCDate() === d
+  );
+}
+
 function isSubPath(parentDir, childPath) {
   const rel = path.relative(path.resolve(parentDir), path.resolve(childPath));
   return Boolean(rel && !rel.startsWith('..') && !path.isAbsolute(rel));
@@ -231,14 +245,15 @@ function createMeeting({
   mapping = {},
   terms = {},
   allowEmpty = false,
-  force = false
+  force = false,
+  forceAll = false
 } = {}) {
-  // 1. Validate date format (strictly YYYY-MM-DD) & prevent path traversal
-  if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date.trim())) {
+  // 1. Validate calendar date format (strictly real YYYY-MM-DD, rejecting 2026-02-31 or 2026-13-45) & prevent path traversal
+  if (!isValidCalendarDate(date)) {
     return {
       ok: false,
       reason: 'invalid_date',
-      error: `Invalid date "${date}". Expected strict YYYY-MM-DD format.`
+      error: `Invalid calendar date "${date}". Expected a valid YYYY-MM-DD date.`
     };
   }
   const cleanDate = date.trim();
@@ -319,12 +334,16 @@ function createMeeting({
 
   // 3. Protect existing human-edited 01-transcript.md unless force: true (--force)
   const transcriptPath = path.join(meetingDir, '01-transcript.md');
-  if (fs.existsSync(transcriptPath) && !force) {
+  const hadExistingTranscript = fs.existsSync(transcriptPath);
+  if (hadExistingTranscript && !force && !forceAll) {
     return {
       ok: false,
       reason: 'meeting_already_exists',
-      error: `Meeting transcript already exists at ${transcriptPath}. Pass --force to overwrite.`
+      error: `Meeting transcript already exists at ${transcriptPath}. Pass --force to overwrite (a .bak backup will be saved).`
     };
+  }
+  if (hadExistingTranscript && (force || forceAll)) {
+    fs.copyFileSync(transcriptPath, `${transcriptPath}.bak`);
   }
 
   const templatesDir = path.join(projectDir, 'templates');
@@ -387,7 +406,26 @@ function createMeeting({
   const transcriptMd = transcriptLines.join('\n') + '\n';
   fs.writeFileSync(transcriptPath, transcriptMd, 'utf8');
 
-  // 6. Create 02-summary.md (only mark 🟢 if real transcript was provided and has no uncertainty; otherwise mark 🔴/⚠️!)
+  // 6. Create 02-summary.md (extract actual verified statements with exact single-line #L<n> citations;
+  // by default --force only overwrites 01-transcript.md unless --force-all is passed, and always saves .bak before overwriting)
+  const extractedBullets = [];
+  if (hasRealTranscript) {
+    for (let idx = 0; idx < mapped.lines.length; idx++) {
+      const lineText = mapped.lines[idx].trim();
+      if (!lineText || lineText.includes('⚠️')) continue;
+      const exactLine = firstContentLine + idx;
+      extractedBullets.push(
+        `- 🟢 ${lineText}（來源：[01-transcript.md](./01-transcript.md#L${exactLine})）`
+      );
+      if (extractedBullets.length >= 5) break;
+    }
+  }
+  if (extractedBullets.length === 0) {
+    const fallbackBadge = hasRealTranscript ? '🟡' : '🔴 ⚠️ [需人為確認 - 尚未匯入逐字稿]';
+    extractedBullets.push(
+      `- ${fallbackBadge} **討論事項 1**：詳見逐字稿原始對話紀錄（來源：[01-transcript.md](./01-transcript.md#L${firstContentLine}-L${transcriptTotalLines})）。`
+    );
+  }
   const summaryBadge = hasRealTranscript ? '🟢' : '🔴 ⚠️ [需人為確認 - 尚未匯入逐字稿]';
   const summaryMd = `# 02. 會議摘要與重點決議 (${safeProject} - ${cleanDate})
 
@@ -395,14 +433,17 @@ function createMeeting({
 - ${summaryBadge} 本次會議針對 **${safeProject}**（${title}）進行紀錄整理（來源：[01-transcript.md](./01-transcript.md#L${firstContentLine}-L${transcriptTotalLines})）。
 
 ## 核心討論重點與決議 (Key Points & Decisions)
-- ${summaryBadge} **討論事項 1**：詳見逐字稿原始對話紀錄（來源：[01-transcript.md](./01-transcript.md#L${firstContentLine}-L${transcriptTotalLines})）。
+${extractedBullets.join('\n')}
 `;
   const summaryPath = path.join(meetingDir, '02-summary.md');
-  if (!fs.existsSync(summaryPath) || force) {
+  if (!fs.existsSync(summaryPath) || forceAll) {
+    if (fs.existsSync(summaryPath) && forceAll) {
+      fs.copyFileSync(summaryPath, `${summaryPath}.bak`);
+    }
     fs.writeFileSync(summaryPath, summaryMd, 'utf8');
   }
 
-  // 7. Create 03-todos-and-discussion.md
+  // 7. Create 03-todos-and-discussion.md (preserved on --force unless --force-all is passed)
   const uncertaintySection = mapped.uncertaintyFlags.length > 0
     ? mapped.uncertaintyFlags.map((u, idx) => `- 🚨 **[需人為確認 #${idx + 1}]** (${u.type}): \`${u.preview}\``).join('\n')
     : '- 無高不確定性待確認項目。';
@@ -427,7 +468,10 @@ ${uncertaintySection}
 - 可於此處與 AI 持續針對會議決議與待辦進行延伸討論並回寫紀錄。
 `;
   const todosPath = path.join(meetingDir, '03-todos-and-discussion.md');
-  if (!fs.existsSync(todosPath) || force) {
+  if (!fs.existsSync(todosPath) || forceAll) {
+    if (fs.existsSync(todosPath) && forceAll) {
+      fs.copyFileSync(todosPath, `${todosPath}.bak`);
+    }
     fs.writeFileSync(todosPath, todosMd, 'utf8');
   }
 
@@ -557,52 +601,99 @@ function extractKeyFacts(mdContent, sourceLabel) {
   const normalizeFactKey = (k) => {
     if (/上線日|上线日|launch\s*date|リリース日|公開日|ローンチ日|출시일|오픈일|런칭일/i.test(k)) return '預計上線日';
     if (/預算|预算|budget|予算|예산/i.test(k)) return '預算';
+    if (/負責人|负责人|owner|pic|担当者|責任者|담당자|책임자/i.test(k)) return '負責人';
     return k;
   };
+
+  const cleanCapturedValue = (v) =>
+    String(v || '')
+      .replace(/\s*(?:\((?:[^()\r\n]|\([^()\r\n]*\))*#L\d+(?:[^()\r\n]|\([^()\r\n]*\))*\)|（(?:[^（）\r\n]|\([^()\r\n]*\))*#L\d+(?:[^（）\r\n]|\([^()\r\n]*\))*）|\((?:來源|来源|見|见|參見|参见|source|see)[\s:：].*?\)|（(?:來源|来源|見|见|參見|参见)[\s:：].*?）)\s*$/i, '')
+      .replace(/^[\s:：→\-*>]+|[\s，,。；;！!]+$/g, '')
+      .trim();
 
   for (let i = 0; i < lines.length; i++) {
     const rawLine = lines[i];
     const lineNum = i + 1;
 
-    // Skip hypothetical questions, unconfirmed ⚠️ lines, or conditional clauses (even mid-sentence like "討論如果...") so they don't trigger false decision conflicts
+    // Skip hypothetical questions, unconfirmed ⚠️ lines, or conditional clauses (even mid-sentence like "討論如果..." or "...是否...？") so they don't trigger false decision conflicts
     if (
-      /⚠️|[\?？]\s*$/.test(rawLine) ||
-      /(?:如果|假如|假設|假设|討論是否|讨论是否|評估是否|评估是否|尚未決定|尚未决定|未決議|未决议|(?:^|[\s，,：:])若|\bif\b|\bwhether\b|\bwhat\s+if\b|もし|仮に|만약|혹시)/i.test(rawLine)
+      /⚠️|[\?？]/.test(rawLine) ||
+      /(?:如果|假如|假設|假设|是否|討論是否|讨论是否|評估是否|评估是否|尚未決定|尚未决定|未決議|未决议|(?:^|[\s，,：:])若|\bif\b|\bwhether\b|\bwhat\s+if\b|もし|仮に|만약|혹시)/i.test(rawLine)
     ) {
       continue;
     }
+
+    // Strip leading timestamp & speaker prefix (e.g. `- 🟢 [00:01:00] **王經理 (PM)**: `) and trailing source citations before prose matching
+    const proseBody = cleanCapturedValue(
+      rawLine.replace(/^\s*(?:[-*]\s*)?(?:(?:🟢|🟡|🔴)\s*)?(?:\[\d{2}:\d{2}:\d{2}\]\s*)?(?:\*\*[^*:：]+\*\*[:：]\s*)?(?=\S)/, '')
+    );
 
     // 1. Structured `- **Key**: Value` (strip trailing parenthetical source/line citations before comparison)
     const m = rawLine.match(factRegex);
     if (m) {
       const rawKey = m[1].trim();
-      const val = m[2]
-        .replace(/\s*(?:\([^()\r\n]*#L\d+[^()\r\n]*\)|（[^（）\r\n]*#L\d+[^（）\r\n]*）|\((?:來源|来源|見|见|參見|参见|source|see)[\s:：].*?\)|（(?:來源|来源|見|见|參見|参见)[\s:：].*?）)\s*$/i, '')
-        .trim();
+      let val = cleanCapturedValue(m[2]);
+      // If value contains a transition arrow or "改為/改由/->", take the new value after the transition
+      const arrowParts = val.split(/(?:(?:→|->)\s*)?(?:改為|改为|改由|調整為|调整为|調整至|调整至|延至|延後至|延后至|延後到|延后到|changed\s+to|moved\s+to|delayed\s+to)|(?:→|->)/i);
+      if (arrowParts.length > 1 && arrowParts[arrowParts.length - 1].trim()) {
+        val = cleanCapturedValue(arrowParts[arrowParts.length - 1]);
+      }
       if (!ignoreKeys.has(rawKey) && val && !val.startsWith('{{')) {
         const key = normalizeFactKey(rawKey);
         facts[key] = { value: val, line: lineNum, source: sourceLabel };
       }
     }
 
-    // 2. Natural-language prose: 上線日 / 上线日 / Launch Date / リリース日 / 출시일 (zh-TW, zh-CN, en, ja, ko)
-    const launchMatch =
-      rawLine.match(/(?:預計|预计)?(?:上線日|上线日)(?:期)?(?:鎖定在|锁定在|鎖定為|锁定为|定在|定為|定为|改為|改为|延後到|延后到|延後至|延后至|延至|調整至|调整至|調整為|调整为|為|为|是|[:：]\s*)\s*([0-9]{4}[-/][0-9]{1,2}[-/][0-9]{1,2}|[0-9]{1,2}\/[0-9]{1,2}|[0-9]{1,2}月[0-9]{1,2}日)/) ||
-      rawLine.match(/launch\s+date(?:\s+is|\s+was)?(?:\s+set\s+to|\s+locked\s+at|\s+changed\s+to|\s+moved\s+to|\s+delayed\s+to|[:：]\s*)\s*([0-9]{4}[-/][0-9]{1,2}[-/][0-9]{1,2}|[0-9]{1,2}\/[0-9]{1,2}|[A-Za-z]+\s+\d{1,2})/i) ||
-      rawLine.match(/(?:リリース日|公開日|ローンチ日)(?:は|を|が|[:：]\s*)\s*([0-9]{4}[-/][0-9]{1,2}[-/][0-9]{1,2}|[0-9]{1,2}\/[0-9]{1,2}|[0-9]{1,2}月[0-9]{1,2}日)/) ||
-      rawLine.match(/(?:출시일|오픈일|런칭일)(?:은|는|을|를|이|가|[:：]\s*)\s*([0-9]{4}[-/][0-9]{1,2}[-/][0-9]{1,2}|[0-9]{1,2}\/[0-9]{1,2}|[0-9]{1,2}월\s*[0-9]{1,2}일)/);
+    // 2. Natural-language prose: 上線日 / 上线日 / Launch Date / リリース日 / 출시일 (supports direct "上線日 12/01", verb phrases, and "12/01 → 改為 12/15")
+    const dateToken = '([0-9]{4}[-/][0-9]{1,2}[-/][0-9]{1,2}|[0-9]{1,2}\\/[0-9]{1,2}|[0-9]{1,2}月[0-9]{1,2}日|[0-9]{1,2}월\\s*[0-9]{1,2}일|[A-Za-z]+\\s+\\d{1,2})';
+    const launchTransition = proseBody.match(
+      new RegExp(`(?:預計|预计)?(?:上線日|上线日|launch\\s+date|リリース日|公開日|ローンチ日|출시일|오픈일|런칭일)[^。；;\\r\\n]*?(?:(?:(?:→|->)\\s*)?(?:改為|改为|調整為|调整为|調整至|调整至|延至|延後至|延后至|延後到|延后到|changed\\s+to|moved\\s+to|delayed\\s+to)|(?:→|->))\\s*${dateToken}`, 'i')
+    );
+    const launchDirect =
+      proseBody.match(new RegExp(`(?:預計|预计)?(?:上線日|上线日)(?:期)?(?:鎖定在|锁定在|鎖定為|锁定为|定在|定為|定为|改為|改为|延後到|延后到|延後至|延后至|延至|調整至|调整至|調整為|调整为|為|为|是|[:：]|\\s+)\\s*${dateToken}`)) ||
+      proseBody.match(new RegExp(`launch\\s+date(?:\\s+is|\\s+was)?(?:\\s+set\\s+to|\\s+locked\\s+at|\\s+changed\\s+to|\\s+moved\\s+to|\\s+delayed\\s+to|[:：]|\\s+)\\s*${dateToken}`, 'i')) ||
+      proseBody.match(new RegExp(`(?:リリース日|公開日|ローンチ日)(?:は|を|が|[:：]|\\s+)\\s*${dateToken}`)) ||
+      proseBody.match(new RegExp(`(?:출시일|오픈일|런칭일)(?:은|는|을|를|이|가|[:：]|\\s+)\\s*${dateToken}`));
+    const launchMatch = launchTransition || launchDirect;
     if (launchMatch) {
-      facts['預計上線日'] = { value: launchMatch[1].trim(), line: lineNum, source: sourceLabel };
+      facts['預計上線日'] = { value: cleanCapturedValue(launchMatch[1]), line: lineNum, source: sourceLabel };
     }
 
-    // 3. Natural-language prose: 預算 / 预算 / Budget / 予算 / 예산 (zh-TW, zh-CN, en, ja, ko)
-    const budgetMatch =
-      rawLine.match(/(?:預算|预算)(?:金額|金额|上限)?(?:鎖定在|锁定在|鎖定為|锁定为|定在|定為|定为|改為|改为|調整為|调整为|調整至|调整至|增加到|提高到|降為|降为|為|为|是|[:：]\s*)\s*([0-9.,]+\s*(?:萬|万|億|亿|元|k|K|M|USD|TWD|NTD)?)/) ||
-      rawLine.match(/budget(?:\s+is|\s+was)?(?:\s+set\s+to|\s+locked\s+at|\s+changed\s+to|\s+increased\s+to|\s+reduced\s+to|[:：]\s*)\s*(\$?[0-9.,]+\s*(?:k|K|M|USD|TWD)?)/i) ||
-      rawLine.match(/予算(?:上限|金額)?(?:は|を|が|[:：]\s*)\s*([0-9.,]+\s*(?:万円|億円|円|万|k|K|M|USD|JPY)?)/) ||
-      rawLine.match(/예산(?:은|는|을|를|이|가|[:：]\s*)\s*([0-9.,]+\s*(?:만원|억원|원|만|k|K|M|USD|KRW)?)/);
+    // 3. Natural-language prose: 預算 / 预算 / Budget / 予算 / 예산 (supports "預算 50 萬", "預算改為 60 萬", "預算 50 萬→改為 60 萬"; longer multi-char units first)
+    const budgetToken = '(\\$?[0-9.,]+\\s*(?:万円|億円|만원|억원|USD|TWD|NTD|JPY|KRW|萬|万|億|亿|元|円|원|만|k|K|M)?)';
+    const budgetTransition = proseBody.match(
+      new RegExp(`(?:預算|预算|budget|予算|예산)[^。；;\\r\\n]*?(?:(?:(?:→|->)\\s*)?(?:改為|改为|調整為|调整为|調整至|调整至|增加到|提高到|降為|降为|changed\\s+to|increased\\s+to|reduced\\s+to)|(?:→|->))\\s*${budgetToken}`, 'i')
+    );
+    const budgetDirect =
+      proseBody.match(new RegExp(`(?:預算|预算)(?:金額|金额|上限|部分)?(?:鎖定在|锁定在|鎖定為|锁定为|定在|定為|定为|改為|改为|調整為|调整为|調整至|调整至|增加到|提高到|降為|降为|為|为|是|[:：]|\\s+)\\s*${budgetToken}`)) ||
+      proseBody.match(new RegExp(`budget(?:\\s+is|\\s+was)?(?:\\s+set\\s+to|\\s+locked\\s+at|\\s+changed\\s+to|\\s+increased\\s+to|\\s+reduced\\s+to|[:：]|\\s+)\\s*${budgetToken}`, 'i')) ||
+      proseBody.match(new RegExp(`予算(?:上限|金額)?(?:は|を|が|[:：]|\\s+)\\s*${budgetToken}`)) ||
+      proseBody.match(new RegExp(`예산(?:은|는|을|를|이|가|[:：]|\\s+)\\s*${budgetToken}`));
+    const budgetMatch = budgetTransition || budgetDirect;
     if (budgetMatch) {
-      facts['預算'] = { value: budgetMatch[1].trim(), line: lineNum, source: sourceLabel };
+      facts['預算'] = { value: cleanCapturedValue(budgetMatch[1]), line: lineNum, source: sourceLabel };
+    }
+
+    // 4. Natural-language prose: 負責人 / 负责人 / Owner / PIC / 担当者 / 담당자 (supports "負責人王經理", "負責人：王經理", "由王經理負責", "負責人王經理→改由李工程師", "改由李工程師負責")
+    const personToken = '([A-Za-z0-9_\\u4e00-\\u9fa5\\u3040-\\u30ff\\uac00-\\ud7af]{2,15}(?:\\s*\\((?!來源|来源|見|见|source|see)[^()#\\r\\n]{1,15}\\))?)';
+    const ownerTransition =
+      proseBody.match(new RegExp(`(?:負責人|负责人|owner|pic|担当者|담당자)[^。；;\\r\\n]*?(?:(?:(?:→|->)\\s*)?(?:改為|改为|改由|換成|换成|換由|换由|changed\\s+to|reassigned\\s+to)|(?:→|->))\\s*${personToken}(?:負責|负责)?`, 'i')) ||
+      proseBody.match(new RegExp(`(?:→|->)?\\s*(?:改由|換由|换由)\\s*${personToken}\\s*(?:負責|负责)`));
+    const ownerDirect =
+      proseBody.match(new RegExp(`(?:負責人|负责人)(?:鎖定為|锁定为|定為|定为|改為|改为|改由|為|为|是|[:：]|\\s+)?\\s*${personToken}`)) ||
+      proseBody.match(new RegExp(`(?:由)\\s*${personToken}\\s*(?:擔任|担任)?(?:負責人|负责人|主責|主责|負責|负责)`)) ||
+      proseBody.match(new RegExp(`(?:owner|pic)(?:\\s+is|\\s+was)?(?:\\s+set\\s+to|\\s+changed\\s+to|\\s+assigned\\s+to|[:：])\\s*${personToken}`, 'i')) ||
+      proseBody.match(new RegExp(`(?:担当者|責任者)(?:は|を|が|[:：])\\s*${personToken}`)) ||
+      proseBody.match(new RegExp(`(?:담당자|책임자)(?:은|는|을|를|이|가|[:：])\\s*${personToken}`));
+    const ownerMatch = ownerTransition || ownerDirect;
+    if (ownerMatch) {
+      const candidateOwner = cleanCapturedValue(ownerMatch[1])
+        .replace(/^(?:改由|改為|改为|換由|换由|換成|换成|為|为|是)\s*/, '')
+        .replace(/(?:負責|负责)$/, '')
+        .trim();
+      if (candidateOwner && !/^(?:待確認|待确认|TBD)$/i.test(candidateOwner)) {
+        facts['負責人'] = { value: candidateOwner, line: lineNum, source: sourceLabel };
+      }
     }
   }
   return facts;
