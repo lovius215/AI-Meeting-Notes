@@ -19,6 +19,17 @@ function ensureDir(dirPath) {
   }
 }
 
+/**
+ * Returns YYYY-MM-DD in the user's local timezone (instead of UTC via toISOString()),
+ * preventing off-by-one date errors during early morning hours in UTC+8 / UTC+9 / etc.
+ */
+function getLocalDateString(d = new Date()) {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 function isToolGeneratedContent(content) {
   if (!content) return false;
   return (
@@ -257,6 +268,7 @@ function parseCliArgs(argv) {
 
 module.exports = {
   ensureDir,
+  getLocalDateString,
   isToolGeneratedContent,
   readConfig,
   writeConfig,

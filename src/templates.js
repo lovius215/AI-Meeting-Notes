@@ -1271,6 +1271,18 @@ ${navBar}
 | **5. 完稿後七維度強制檢核 \`Rule\`** | 每次所有會議文件建立或更新後，強制觸發隱藏的 \`post-meeting-inspection.md\` 檢核規則，自動檢查結構純淨度、語者完整度、\`#Lx-Ly\` 行號真實性、高風險不確定項與跨期衝突，並輸出檢核報告。 |
 | **6. 0-Token 防幻覺驗證與 \`A4 PDF / HTML\` 匯出** | 內建 0-Token \`${cliName} verify\` 實體行號校驗、\`${cliName} pdf --merge\` 高品質 A4 PDF / HTML 報表匯出與 \`${cliName} commit\` 安全 Git 歸檔。 |
 
+### 1.2.1 架構分工說明：Node.js CLI 確定性引擎 vs. 外部 ASR / AI Agent 協作邊界
+本工具為**「零外部依賴的 AI 會議整理工作台與確定性防幻覺引擎」**（而非單機獨立語音辨識軟體），採三層解耦協作架構：
+
+| 功能項目 | 執行引擎 | 實際運作機制 |
+| :--- | :--- | :--- |
+| **建立會議目錄、範本與 \`.bak\` 防覆蓋保護** | **Node.js CLI 核心（內建）** | 由 \`${cliName} new-meeting\` 與 \`deliverable\` 確定性執行（使用本地時區日期、多代 \`.bak\` 備份）。 |
+| **媒體 \`SHA-256\` 串流雜湊與時長解析** | **Node.js CLI 核心（內建）** | 內建 64 KiB 串流 \`SHA-256\` 與原生 \`.wav\` 標頭時長解析；其他影音格式選配呼叫系統 \`ffprobe\`。 |
+| **語者代號與專有名詞 0-Token 批次替換** | **Node.js CLI 核心（內建）** | 由 \`applySpeakerMapping\` 單次正則掃描解析 \`.srt/.vtt/.txt\` 並替換 \`SPEAKER_00 -> 實名\`。 |
+| **\`#Lx-Ly\` 行號校驗、Stale Hash 與衝突規則檢核** | **Node.js CLI 核心（內建）** | 由 \`${cliName} verify\` 與 \`${cliName} inspect\` 驗證行號、逐字稿異動 Stale Hash 與結構化／三大欄位跨期衝突。 |
+| **原始錄音／錄影轉文字與語者分離 (Stage 1 ASR)** | **外部 ASR / 會議軟體字幕** | 匯入 Zoom/Teams/Meet 現成 \`.srt/.vtt\` 字幕，或由本機 \`WhisperX\` / \`mlx_whisper\` / \`faster-whisper\` 轉出初稿。 |
+| **深度語意摘要、行動項目提煉與跨期語意分析** | **外部 AI Agent（依賴 \`.${cliName}/\` 規則）** | 由 Claude / Gemini / Cursor / Codex / Antigravity 讀取 \`.${cliName}/AGENTS.md\` 與 \`SKILL.md\` 進行深度語意提煉。 |
+
 ---
 
 ### 1.3 支援語言與國際化規範 (Supported Languages & Multilingual ASR)

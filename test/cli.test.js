@@ -1458,6 +1458,99 @@ test('17. all-in-one final audit: clean conversational init (0 verify errors, no
       true,
       JSON.stringify(ownerConflictInspect.conflicts)
     );
+
+    // 17n. ChatGPT Audit fixes:
+    // - Local timezone date formatting (getLocalDateString)
+    // - Stale downstream hash detection (staleFiles) after --force updates 01-transcript.md without --force-all
+    // - Real Action Items extraction into 03-todos-and-discussion.md (task, assignee, due date, #L<n>)
+    // - Native 0-dependency WAV duration probing in getMediaMetadata
+    // - Same-day chronological ordering (2026-11-20_Morning-Sync -> 2026-11-20_Afternoon-Sync despite 'Afternoon' < 'Morning')
+    // - Structured Markdown Table decision conflict detection (| 資料庫架構 | PostgreSQL | vs | 資料庫架構 | MySQL |)
+    const { getLocalDateString } = require('../src/utils');
+    const { getMediaMetadata } = require('../src/meeting');
+    const localSample = new Date(2026, 10, 20, 0, 30, 0); // Local 2026-11-20 00:30:00
+    assert.equal(getLocalDateString(localSample), '2026-11-20');
+
+    // Create a valid 5-second RIFF/WAVE file header (byteRate = 16000, data size = 80000 -> 5.0s)
+    const wavPath = path.join(tmpDir, 'recording.wav');
+    const wavBuf = Buffer.alloc(44 + 80000);
+    wavBuf.write('RIFF', 0, 'ascii');
+    wavBuf.writeUInt32LE(36 + 80000, 4);
+    wavBuf.write('WAVE', 8, 'ascii');
+    wavBuf.write('fmt ', 12, 'ascii');
+    wavBuf.writeUInt32LE(16, 16);
+    wavBuf.writeUInt16LE(1, 20); // PCM
+    wavBuf.writeUInt16LE(1, 22); // 1 channel
+    wavBuf.writeUInt32LE(8000, 24); // sampleRate
+    wavBuf.writeUInt32LE(16000, 28); // byteRate = 16000 bytes/sec
+    wavBuf.writeUInt16LE(2, 32);
+    wavBuf.writeUInt16LE(16, 34);
+    wavBuf.write('data', 36, 'ascii');
+    wavBuf.writeUInt32LE(80000, 40);
+    fs.writeFileSync(wavPath, wavBuf);
+
+    const wavMeta = getMediaMetadata(wavPath);
+    assert.equal(wavMeta.durationSeconds, 5);
+    assert.equal(wavMeta.durationFormatted, '00:00:05');
+
+    // Same-day Meeting 1: Morning-Sync (created first) with action item and table decision
+    const mMorning = createMeeting({
+      cwd: tmpDir,
+      project: 'SameDayProj',
+      title: 'Morning-Sync',
+      date: '2026-11-20',
+      mediaFile: wavPath,
+      transcriptText: '[00:00:02] **王經理**：請李工程師於 11/25 前完成壓力測試報告。'
+    });
+    assert.equal(mMorning.ok, true);
+    assert.match(fs.readFileSync(path.join(mMorning.meetingDir, '01-transcript.md'), 'utf8'), /時長: 00:00:05/);
+    const morningTodos = fs.readFileSync(path.join(mMorning.meetingDir, '03-todos-and-discussion.md'), 'utf8');
+    // Real action item extracted with owner "李工程師", due date "11/25", and exact citation #L12
+    assert.match(morningTodos, /\|\s*AI-01\s*\|\s*請李工程師於 11\/25 前完成壓力測試報告。\s*\|\s*李工程師\s*\|\s*11\/25\s*\|\s*🟢 已溯源至逐字稿\s*\|.*#L12\)/);
+
+    fs.appendFileSync(
+      path.join(mMorning.meetingDir, '02-summary.md'),
+      '\n| 項目 | 決議 |\n| :--- | :--- |\n| 資料庫引擎 | PostgreSQL ([01-transcript.md](./01-transcript.md#L12)) |\n',
+      'utf8'
+    );
+
+    // Same-day Meeting 2: Afternoon-Sync (created second, even though 'Afternoon' < 'Morning' alphabetically!)
+    const mAfternoon = createMeeting({
+      cwd: tmpDir,
+      project: 'SameDayProj',
+      title: 'Afternoon-Sync',
+      date: '2026-11-20',
+      transcriptText: '[00:00:05] **王經理**：下午重新評估資料庫架構。'
+    });
+    assert.equal(mAfternoon.ok, true);
+    fs.appendFileSync(
+      path.join(mAfternoon.meetingDir, '02-summary.md'),
+      '\n| 項目 | 決議 |\n| :--- | :--- |\n| 資料庫引擎 | MySQL ([01-transcript.md](./01-transcript.md#L11)) |\n',
+      'utf8'
+    );
+
+    const afternoonInspect = inspectMeetingDirectory(mAfternoon.meetingDir);
+    assert.equal(
+      afternoonInspect.conflicts.some(
+        (c) => c.key === '資料庫引擎' && c.previousValue === 'PostgreSQL' && c.currentValue === 'MySQL'
+      ),
+      true,
+      JSON.stringify(afternoonInspect.conflicts)
+    );
+
+    // Now update mMorning's transcript with force: true (without forceAll) -> 02 & 03 become stale!
+    createMeeting({
+      cwd: tmpDir,
+      project: 'SameDayProj',
+      title: 'Morning-Sync',
+      date: '2026-11-20',
+      mediaFile: wavPath,
+      transcriptText: '[00:00:02] **王經理**：更新後的逐字稿內容，請李工程師於 11/28 前完成壓力測試報告。',
+      force: true
+    });
+    const staleInspect = inspectMeetingDirectory(mMorning.meetingDir);
+    assert.equal(staleInspect.ok, false);
+    assert.deepEqual(staleInspect.staleFiles, ['02-summary.md', '03-todos-and-discussion.md']);
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

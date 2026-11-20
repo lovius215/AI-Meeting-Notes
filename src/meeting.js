@@ -3,11 +3,68 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { ensureDir, saveSafeBackup } = require('./utils');
+const { spawnSync } = require('node:child_process');
+const { ensureDir, getLocalDateString, saveSafeBackup } = require('./utils');
 const { verifyFile } = require('./verify');
 
+let meetingCreationSeq = 0;
+
+function formatDurationHMS(totalSeconds) {
+  if (typeof totalSeconds !== 'number' || !Number.isFinite(totalSeconds) || totalSeconds < 0) {
+    return null;
+  }
+  const rounded = Math.round(totalSeconds);
+  const hrs = Math.floor(rounded / 3600);
+  const mins = Math.floor((rounded % 3600) / 60);
+  const secs = rounded % 60;
+  return `${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+}
+
 /**
- * Compute SHA-256 checksum and file size of a media file using 64 KiB streaming chunks
+ * Zero-dependency media duration prober:
+ * 1. Parses standard RIFF/WAVE (.wav) headers natively in Node.js (0 external binaries required).
+ * 2. Optionally invokes `ffprobe` if installed on the system for .mp3/.m4a/.mp4/.mov/.mkv/etc.
+ */
+function probeMediaDurationSeconds(filePath, fileSize) {
+  try {
+    const fd = fs.openSync(filePath, 'r');
+    try {
+      const header = Buffer.alloc(44);
+      const read = fs.readSync(fd, header, 0, 44, 0);
+      if (
+        read >= 44 &&
+        header.toString('ascii', 0, 4) === 'RIFF' &&
+        header.toString('ascii', 8, 12) === 'WAVE'
+      ) {
+        const byteRate = header.readUInt32LE(28);
+        if (byteRate > 0 && fileSize > 44) {
+          return Math.round(((fileSize - 44) / byteRate) * 100) / 100;
+        }
+      }
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch (_) {}
+
+  try {
+    const res = spawnSync(
+      'ffprobe',
+      ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', filePath],
+      { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] }
+    );
+    if (res.status === 0 && res.stdout) {
+      const parsed = parseFloat(res.stdout.trim());
+      if (Number.isFinite(parsed) && parsed >= 0) {
+        return Math.round(parsed * 100) / 100;
+      }
+    }
+  } catch (_) {}
+
+  return null;
+}
+
+/**
+ * Compute SHA-256 checksum, file size, and optional duration of a media file using 64 KiB streaming chunks
  * so large multi-GB video files (.mp4 / .mkv) never exceed Node.js Buffer memory limits.
  */
 function getMediaMetadata(filePath) {
@@ -26,10 +83,13 @@ function getMediaMetadata(filePath) {
   } finally {
     fs.closeSync(fd);
   }
+  const durationSeconds = probeMediaDurationSeconds(filePath, stat.size);
   return {
     fileName: path.basename(filePath),
     sizeBytes: stat.size,
-    sha256: hash.digest('hex')
+    sha256: hash.digest('hex'),
+    durationSeconds,
+    durationFormatted: formatDurationHMS(durationSeconds)
   };
 }
 
@@ -228,6 +288,55 @@ function isSubPath(parentDir, childPath) {
   return Boolean(rel && !rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
+function extractActionItemsFromLines(mappedLines, firstContentLine, transcriptTotalLines, hasRealTranscript) {
+  const actionRegex = /(?:待辦|待办|TODO|Action\s*Item|請\s*[^，,。：:\s]{2,12}\s*(?:負責|负责|處理|处理|協助|协助|提供|準備|准备|完成|跟進|跟进)|由\s*[^，,。：:\s]{2,12}\s*(?:負責|负责|處理|处理|跟進|跟进|準備|准备|完成)|(?:我會|我会|我來|我来)(?:負責|负责|處理|处理|準備|准备|完成|跟進|跟进)|於\s*[^，,。\s]{2,15}\s*前(?:完成|提交|交付|提供)|will\s+(?:prepare|handle|send|update|fix|follow\s+up|complete)|action\s+item|宿題|対応する|할\s*일)/i;
+  const extractedRows = [];
+
+  if (hasRealTranscript && Array.isArray(mappedLines)) {
+    for (let idx = 0; idx < mappedLines.length; idx++) {
+      const raw = mappedLines[idx].trim();
+      if (!raw || raw.includes('⚠️')) continue;
+      if (!actionRegex.test(raw)) continue;
+
+      const exactLine = firstContentLine + idx;
+      const speakerMatch = raw.match(/\*\*([^*]+)\*\*/);
+      const speakerName = speakerMatch ? speakerMatch[1].trim() : null;
+
+      const assigneeMatch =
+        raw.match(/(?:請|由)\s*([A-Za-z0-9_\u4e00-\u9fa5\u3040-\u30ff\uac00-\ud7af]{2,10}?)(?=\s*(?:於|在|負責|负责|處理|处理|協助|协助|提供|準備|准备|完成|跟進|跟进|提交|交付))/) ||
+        raw.match(/(?:負責人|负责人|Owner|PIC|担当者|담당자)(?:為|为|是|[:：]|\s+)\s*([A-Za-z0-9_\u4e00-\u9fa5\u3040-\u30ff\uac00-\ud7af]{2,12})/);
+      const rawOwner = assigneeMatch
+        ? assigneeMatch[1].replace(/(?:擔任|担任|負責|负责|處理|处理)+$/, '').trim()
+        : (speakerName || '待確認 (TBD)');
+      const owner = rawOwner || '待確認 (TBD)';
+
+      const dueMatch = raw.match(/([0-9]{4}[-/][0-9]{1,2}[-/][0-9]{1,2}|[0-9]{1,2}\/[0-9]{1,2}|[0-9]{1,2}月[0-9]{1,2}日|下週[一二三四五六日]?|本週[一二三四五六日]?|下周[一二三四五六日]?|本周[一二三四五六日]?|Friday|Monday|Tuesday|Wednesday|Thursday)/i);
+      const dueDate = dueMatch ? dueMatch[1].trim() : '待確認 (TBD)';
+
+      const cleanTask = raw
+        .replace(/^\[\d{2}:\d{2}:\d{2}\]\s*/, '')
+        .replace(/^\*\*[^*]+\*\*[:：]\s*/, '')
+        .replace(/\|/g, '｜')
+        .trim();
+
+      const hasBothOwnerAndDue = owner !== '待確認 (TBD)' && dueDate !== '待確認 (TBD)';
+      const badge = hasBothOwnerAndDue ? '🟢 已溯源至逐字稿' : '🟡 待確認負責人/期限 (TBD)';
+      const aiId = `AI-${String(extractedRows.length + 1).padStart(2, '0')}`;
+      extractedRows.push(
+        `| ${aiId} | ${cleanTask} | ${owner} | ${dueDate} | ${badge} | [01-transcript.md](./01-transcript.md#L${exactLine}) | ⏳ Pending |`
+      );
+    }
+  }
+
+  if (extractedRows.length === 0) {
+    const todoRiskBadge = hasRealTranscript ? '🟡 待確認負責人 (TBD)' : '🔴 ⚠️ [需人為確認 - 無逐字稿來源]';
+    extractedRows.push(
+      `| AI-01 | 確認本次會議待辦事項與負責人 | 待確認 (TBD) | 待確認 (TBD) | ${todoRiskBadge} | [01-transcript.md](./01-transcript.md#L${firstContentLine}-L${transcriptTotalLines}) | ⏳ Pending |`
+    );
+  }
+  return extractedRows;
+}
+
 /**
  * Create a periodic meeting folder under meetings/<project>/<date>_<title>/
  * Enforces strict zero-hallucination, path-traversal prevention, media file validation,
@@ -237,7 +346,7 @@ function createMeeting({
   cwd = process.cwd(),
   project = 'Project-A',
   title = 'Weekly-Sync',
-  date = new Date().toISOString().slice(0, 10),
+  date = getLocalDateString(),
   attendees = [],
   mediaFile = null,
   transcriptFile = null,
@@ -374,7 +483,7 @@ function createMeeting({
 
   const mediaHeaderLines = mediaMeta
     ? [
-        `- **原始媒體檔案**：[${mediaMeta.fileName}](./media/${mediaMeta.fileName}) (${mediaMeta.sizeBytes} bytes)`,
+        `- **原始媒體檔案**：[${mediaMeta.fileName}](./media/${mediaMeta.fileName}) (${mediaMeta.sizeBytes} bytes${mediaMeta.durationFormatted ? `, 時長: ${mediaMeta.durationFormatted}` : ''})`,
         `- **媒體 SHA-256**：\`${mediaMeta.sha256}\``
       ]
     : ['- **原始媒體檔案**：無外部影音檔（純文字紀錄）'];
@@ -401,6 +510,10 @@ function createMeeting({
   const transcriptLines = [...headerLines, ...mapped.lines];
   const transcriptTotalLines = transcriptLines.length;
   const transcriptMd = transcriptLines.join('\n') + '\n';
+  const transcriptSha256 = crypto.createHash('sha256').update(transcriptMd).digest('hex').slice(0, 16);
+  const createdAtIso = `${new Date().toISOString()}-${String(++meetingCreationSeq).padStart(6, '0')}`;
+  const metaComment = `<!-- meeting-date: ${cleanDate} | created-at: ${createdAtIso} | transcript-sha256: ${transcriptSha256} -->`;
+
   if (hadExistingTranscript && (force || forceAll)) {
     saveSafeBackup(transcriptPath, transcriptMd);
   }
@@ -446,16 +559,20 @@ function createMeeting({
   }
 
   const summaryBadge = hasRealTranscript ? '🟢' : '🔴 ⚠️ [需人為確認 - 尚未匯入逐字稿]';
+  const riskLegendLine = hasRealTranscript
+    ? '\n> **風險標記定義**：`🟢 已溯源至逐字稿`（具備 `#Lx-Ly` 真實行號與時間戳依據；若來源為 ASR 初稿，關鍵數字仍建議對照原音複核）｜`🟡 上下文推論 / 待確認`｜`🔴 高不確定性需人為介入`\n'
+    : '';
   const summaryMd = `# 02. 會議摘要與重點決議 (${safeProject} - ${cleanDate})
-
+${riskLegendLine}
 ## 執行摘要 (Executive Summary)
-- ${summaryBadge} 本次 **${safeProject}**（${title}）共記錄 ${hasRealTranscript ? mapped.lines.length : 0} 句對話（已驗證 ${verifiedLineCount} 句，待確認 ${mapped.uncertaintyFlags.length} 項；來源：[01-transcript.md](./01-transcript.md#L${firstContentLine}-L${transcriptTotalLines})）。
+- ${summaryBadge} 本次 **${safeProject}**（${title}）共記錄 ${hasRealTranscript ? mapped.lines.length : 0} 句對話（已溯源 ${verifiedLineCount} 句，待確認 ${mapped.uncertaintyFlags.length} 項；來源：[01-transcript.md](./01-transcript.md#L${firstContentLine}-L${transcriptTotalLines})）。
 
 ## 核心討論重點與決議 (Key Points & Decisions)
 ${decisionBullets.join('\n')}
 
 ${excerptHeading}
 ${shownExcerpts.length > 0 ? shownExcerpts.join('\n') : `- ${summaryBadge} 詳見 [01-transcript.md](./01-transcript.md#L${firstContentLine}-L${transcriptTotalLines})`}
+${metaComment}
 `;
   const summaryPath = path.join(meetingDir, '02-summary.md');
   if (!fs.existsSync(summaryPath) || forceAll) {
@@ -465,12 +582,17 @@ ${shownExcerpts.length > 0 ? shownExcerpts.join('\n') : `- ${summaryBadge} 詳�
     fs.writeFileSync(summaryPath, summaryMd, 'utf8');
   }
 
-  // 7. Create 03-todos-and-discussion.md (preserved on --force unless --force-all is passed)
+  // 7. Create 03-todos-and-discussion.md (extract real action items from transcript; preserved on --force unless --force-all is passed)
   const uncertaintySection = mapped.uncertaintyFlags.length > 0
     ? mapped.uncertaintyFlags.map((u, idx) => `- 🚨 **[需人為確認 #${idx + 1}]** (${u.type}): \`${u.preview}\``).join('\n')
     : '- 無高不確定性待確認項目。';
 
-  const todoRiskBadge = hasRealTranscript ? '🟡 待確認負責人 (TBD)' : '🔴 ⚠️ [需人為確認 - 無逐字稿來源]';
+  const actionItemRows = extractActionItemsFromLines(
+    mapped.lines,
+    firstContentLine,
+    transcriptTotalLines,
+    hasRealTranscript
+  );
 
   const todosMd = `# 03. 待辦事項與會後延伸討論 (${safeProject} - ${cleanDate})
 
@@ -478,7 +600,7 @@ ${shownExcerpts.length > 0 ? shownExcerpts.join('\n') : `- ${summaryBadge} 詳�
 
 | 編號 | 待辦事項 | 負責人 (Owner) | 期限 (Due Date) | 風險等級 | 來源引用 | 狀態 |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| AI-01 | 確認本次會議待辦事項與負責人 | 待確認 (TBD) | 待確認 (TBD) | ${todoRiskBadge} | [01-transcript.md](./01-transcript.md#L${firstContentLine}-L${transcriptTotalLines}) | ⏳ Pending |
+${actionItemRows.join('\n')}
 
 ## 🚨 需人為介入與風險確認清單 (Human Intervention Required)
 ${uncertaintySection}
@@ -488,6 +610,7 @@ ${uncertaintySection}
 
 ## 會後延伸討論區 (Post-Meeting Discussion)
 - 可於此處與 AI 持續針對會議決議與待辦進行延伸討論並回寫紀錄。
+${metaComment}
 `;
   const todosPath = path.join(meetingDir, '03-todos-and-discussion.md');
   if (!fs.existsSync(todosPath) || forceAll) {
@@ -629,7 +752,10 @@ function extractKeyFacts(mdContent, sourceLabel) {
 
   const cleanCapturedValue = (v) =>
     String(v || '')
-      .replace(/\s*(?:\((?:[^()\r\n]|\([^()\r\n]*\))*#L\d+(?:[^()\r\n]|\([^()\r\n]*\))*\)|（(?:[^（）\r\n]|\([^()\r\n]*\))*#L\d+(?:[^（）\r\n]|\([^()\r\n]*\))*）|\((?:來源|来源|見|见|參見|参见|source|see)[\s:：].*?\)|（(?:來源|来源|見|见|參見|参见)[\s:：].*?）)\s*$/i, '')
+      .replace(
+        /\s*(?:\((?:[^()\r\n]|\([^()\r\n]*\))*#L\d+(?:[^()\r\n]|\([^()\r\n]*\))*\)|（(?:[^（）\r\n]|\([^()\r\n]*\))*#L\d+(?:[^（）\r\n]|\([^()\r\n]*\))*）|(?:\(|（)[^()（）\r\n]*\[[^\]]*\]\([^()\r\n]*#L\d+[^()\r\n]*\)[^()（）\r\n]*(?:\)|）)|\((?:來源|来源|見|见|參見|参见|source|see)[\s:：].*?\)|（(?:來源|来源|見|见|參見|参见)[\s:：].*?）)\s*$/i,
+        ''
+      )
       .replace(/^[\s:：→\-*>]+|[\s，,。；;！!]+$/g, '')
       .trim();
 
@@ -664,6 +790,25 @@ function extractKeyFacts(mdContent, sourceLabel) {
       if (!ignoreKeys.has(rawKey) && val && !val.startsWith('{{')) {
         const key = normalizeFactKey(rawKey);
         facts[key] = { value: val, line: lineNum, source: sourceLabel };
+      }
+    }
+
+    // 1b. Structured Markdown table row `| Key | Value |` (skipping table headers, separators, and AI-xx todo rows)
+    const tableRowMatch = rawLine.match(/^\s*\|\s*([^|\r\n]{2,25}?)\s*\|\s*([^|\r\n]+?)\s*\|/);
+    if (tableRowMatch) {
+      const col1 = tableRowMatch[1].replace(/\*\*/g, '').trim();
+      let col2 = cleanCapturedValue(tableRowMatch[2]);
+      if (
+        col1 &&
+        col2 &&
+        !/^:?-{2,}:?$/.test(col1) &&
+        !/^:?-{2,}:?$/.test(col2) &&
+        !/^(?:編號|编号|ID|項目|项目|欄位|栏位|Field|Key|階段|阶段|Stage|AI-\d+)$/i.test(col1) &&
+        !ignoreKeys.has(col1) &&
+        !col2.startsWith('{{')
+      ) {
+        const key = normalizeFactKey(col1);
+        facts[key] = { value: col2, line: lineNum, source: sourceLabel };
       }
     }
 
@@ -780,11 +925,46 @@ function areFactValuesEquivalent(key, valA, valB) {
   return false;
 }
 
+function parseMeetingChronology(folderName, summaryPath) {
+  const folderDateMatch = String(folderName).match(/^(\d{4}-\d{2}-\d{2})/);
+  let meetingDate = folderDateMatch ? folderDateMatch[1] : '0000-00-00';
+  let createdAt = '';
+  let mtimeMs = 0;
+
+  if (summaryPath && fs.existsSync(summaryPath)) {
+    try {
+      const content = fs.readFileSync(summaryPath, 'utf8');
+      const metaMatch = content.match(/<!--\s*meeting-date:\s*([0-9-]+)\s*\|\s*created-at:\s*([^\s|]+)/);
+      if (metaMatch) {
+        meetingDate = metaMatch[1];
+        createdAt = metaMatch[2];
+      }
+      mtimeMs = fs.statSync(summaryPath).mtimeMs;
+    } catch (_) {}
+  }
+  return { folderName, meetingDate, createdAt, mtimeMs };
+}
+
+function isEarlierMeeting(candChrono, currChrono) {
+  if (candChrono.folderName === currChrono.folderName) return false;
+  if (candChrono.meetingDate !== currChrono.meetingDate) {
+    return candChrono.meetingDate < currChrono.meetingDate;
+  }
+  // Same calendar date: compare embedded created-at ISO timestamp if both have it and differ
+  if (candChrono.createdAt && currChrono.createdAt && candChrono.createdAt !== currChrono.createdAt) {
+    return candChrono.createdAt < currChrono.createdAt;
+  }
+  if (candChrono.mtimeMs && currChrono.mtimeMs && Math.abs(candChrono.mtimeMs - currChrono.mtimeMs) > 5) {
+    return candChrono.mtimeMs < currChrono.mtimeMs;
+  }
+  return candChrono.folderName < currChrono.folderName;
+}
+
 /**
  * Deterministically inspect a single meeting folder (Post-Creation Inspection Rule)
  * and check for cross-meeting conflicts against sibling meetings / index.md in the same project.
  * Note: `ok` is true ONLY when structure is valid AND there are zero unresolved human-intervention
- * items (⚠️ / 🚨 / SPEAKER_XX) AND zero unresolved cross-meeting conflicts (⚡).
+ * items (⚠️ / 🚨 / SPEAKER_XX / stale downstream files) AND zero unresolved cross-meeting conflicts (⚡).
  */
 function inspectMeetingDirectory(meetingDir) {
   if (!meetingDir || !fs.existsSync(meetingDir) || !fs.statSync(meetingDir).isDirectory()) {
@@ -795,6 +975,7 @@ function inspectMeetingDirectory(meetingDir) {
       needsHumanReview: false,
       meetingDir,
       missingFiles: ['01-transcript.md', '02-summary.md', '03-todos-and-discussion.md'],
+      staleFiles: [],
       uncitedItems: [],
       verifyIssues: [],
       humanInterventionItems: [],
@@ -804,6 +985,7 @@ function inspectMeetingDirectory(meetingDir) {
 
   const requiredFiles = ['01-transcript.md', '02-summary.md', '03-todos-and-discussion.md'];
   const missingFiles = requiredFiles.filter((f) => !fs.existsSync(path.join(meetingDir, f)));
+  const staleFiles = [];
   const humanInterventionItems = [];
   const conflicts = [];
   const uncitedItems = [];
@@ -815,12 +997,31 @@ function inspectMeetingDirectory(meetingDir) {
     ? path.dirname(meetingsRoot)
     : projectDir;
 
+  const transcriptPath = path.join(meetingDir, '01-transcript.md');
+  const currentTranscriptHash = fs.existsSync(transcriptPath)
+    ? crypto.createHash('sha256').update(fs.readFileSync(transcriptPath, 'utf8')).digest('hex').slice(0, 16)
+    : null;
+
   for (const fname of requiredFiles) {
     const fpath = path.join(meetingDir, fname);
     if (!fs.existsSync(fpath)) continue;
     verifyIssues.push(...verifyFile(fpath, workspaceRoot));
     const content = fs.readFileSync(fpath, 'utf8');
     const lines = content.split(/\r?\n/);
+
+    // Check if downstream 02-summary.md or 03-todos-and-discussion.md is stale after 01-transcript.md was updated via --force
+    if (fname !== '01-transcript.md' && currentTranscriptHash) {
+      const hashMatch = content.match(/transcript-sha256:\s*([0-9a-f]{8,64})/i);
+      if (hashMatch && hashMatch[1] !== currentTranscriptHash) {
+        staleFiles.push(fname);
+        humanInterventionItems.push({
+          file: fname,
+          line: 1,
+          type: 'stale_downstream',
+          text: `⚠️ [逐字稿已更新 (Stale Transcript Hash: ${hashMatch[1]} -> ${currentTranscriptHash}) - 請重新檢視並更新 ${fname}]`
+        });
+      }
+    }
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
@@ -883,11 +1084,14 @@ function inspectMeetingDirectory(meetingDir) {
   if (fs.existsSync(currentSummaryPath) && fs.existsSync(projectDir)) {
     const currentFacts = extractKeyFacts(fs.readFileSync(currentSummaryPath, 'utf8'), `${currentFolder}/02-summary.md`);
     const baselineFacts = {};
+    const currChrono = parseMeetingChronology(currentFolder, currentSummaryPath);
 
     const siblings = fs.readdirSync(projectDir, { withFileTypes: true })
-      .filter((d) => d.isDirectory() && d.name !== 'templates' && d.name < currentFolder)
-      .map((d) => d.name)
-      .sort();
+      .filter((d) => d.isDirectory() && d.name !== 'templates' && d.name !== currentFolder)
+      .map((d) => parseMeetingChronology(d.name, path.join(projectDir, d.name, '02-summary.md')))
+      .filter((c) => isEarlierMeeting(c, currChrono))
+      .sort((a, b) => (isEarlierMeeting(a, b) ? -1 : 1))
+      .map((c) => c.folderName);
 
     for (const sib of siblings) {
       const sibSummary = path.join(projectDir, sib, '02-summary.md');
@@ -924,6 +1128,7 @@ function inspectMeetingDirectory(meetingDir) {
     needsHumanReview,
     meetingDir,
     missingFiles,
+    staleFiles,
     uncitedItems,
     verifyIssues,
     humanInterventionItems,

@@ -3,7 +3,7 @@
 
 const readline = require('node:readline');
 const { PACKAGE_NAME, CLI_NAME, VERSION, SUPPORTED_LANGS, TOOL_MODES } = require('../src/config');
-const { parseCliArgs, readConfig } = require('../src/utils');
+const { parseCliArgs, readConfig, getLocalDateString } = require('../src/utils');
 const { t, getInitPrompts } = require('../src/i18n');
 const { runInit } = require('../src/init');
 const { runVerify } = require('../src/verify');
@@ -139,7 +139,7 @@ function main(argv = process.argv.slice(2)) {
       }
       const project = typeof flags.project === 'string' ? flags.project : (target || 'Project-A');
       const title = typeof flags.title === 'string' ? flags.title : (positional[2] || 'Weekly-Sync');
-      const date = typeof flags.date === 'string' ? flags.date : new Date().toISOString().slice(0, 10);
+      const date = typeof flags.date === 'string' ? flags.date : getLocalDateString();
       const mapping = {};
       if (typeof flags.map === 'string') {
         for (const pair of flags.map.split(/[,;]/)) {
