@@ -2,9 +2,15 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { CLI_NAME, PACKAGE_NAME, HIDDEN_DIR } = require('./config');
+const { CLI_NAME, PACKAGE_NAME } = require('./config');
 const { t } = require('./i18n');
-const { ensureDir, readConfig, writeConfig, extractClaudeMemContext } = require('./utils');
+const {
+  ensureDir,
+  isToolGeneratedContent,
+  readConfig,
+  writeConfig,
+  extractClaudeMemContext
+} = require('./utils');
 const {
   renderAgentsMd,
   renderSkillMd,
@@ -20,7 +26,8 @@ function detectTargetIdentity(cwd, cfg) {
     try {
       const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8'));
       const binKeys = pkg.bin && typeof pkg.bin === 'object' ? Object.keys(pkg.bin) : [];
-      if (binKeys.length > 0) {
+      const pointsToCli = binKeys.some((k) => String(pkg.bin[k]).includes('bin/cli.js'));
+      if (binKeys.length > 0 && pointsToCli) {
         return {
           targetCli: binKeys[0],
           targetPkg: pkg.name || PACKAGE_NAME
@@ -41,12 +48,16 @@ function runUpgrade({ cwd = process.cwd(), flags = {} } = {}) {
   const isDryRun = Boolean(flags['dry-run'] || flags.dryRun);
   const { targetCli, targetPkg } = detectTargetIdentity(cwd, cfg);
 
-  // Safety guard: refuse to overwrite an already-assembled independent tool project unless --force is passed
+  // Safety guard: only block if package.json is an assembled derived CLI tool project (with bin pointing to bin/cli.js)
   const pkgJsonPath = path.join(cwd, 'package.json');
   if (fs.existsSync(pkgJsonPath) && !flags.force) {
     try {
       const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8'));
-      if (pkg.name && pkg.name !== PACKAGE_NAME) {
+      const isDerivedCliTool =
+        pkg.bin &&
+        typeof pkg.bin === 'object' &&
+        Object.values(pkg.bin).some((v) => String(v).includes('bin/cli.js'));
+      if (isDerivedCliTool && pkg.name && pkg.name !== PACKAGE_NAME) {
         console.error(`⛔ Safety stop: "${pkg.name}" is already an independent assembled tool project. Running upgrade here would overwrite its custom AGENTS.md / skills / rules. Pass --force if you really intend to overwrite.`);
         return { ok: false, reason: 'derived_project_protected', packageName: pkg.name };
       }
@@ -62,7 +73,7 @@ function runUpgrade({ cwd = process.cwd(), flags = {} } = {}) {
 
   const actions = [];
 
-  // 1. Update .<targetCli>/AGENTS.md (always hidden like OpenSpec) while preserving <claude-mem-context>
+  // 1. Update .<targetCli>/AGENTS.md while preserving <claude-mem-context>
   const hiddenRoot = path.join(cwd, targetHiddenDir);
   const agentsPath = path.join(hiddenRoot, 'AGENTS.md');
   const legacyAgentsPath = path.join(cwd, 'AGENTS.md');
@@ -82,7 +93,7 @@ function runUpgrade({ cwd = process.cwd(), flags = {} } = {}) {
     fs.writeFileSync(agentsPath, newAgentsContent, 'utf8');
   }
 
-  // 2. Update .<targetCli>/skills/<targetCli>/SKILL.md (always hidden like OpenSpec)
+  // 2. Update .<targetCli>/skills/<targetCli>/SKILL.md
   const skillDir = path.join(cwd, targetHiddenDir, 'skills', targetCli);
   const skillRel = `${targetHiddenDir}/skills/${targetCli}/SKILL.md`;
   const skillPath = path.join(skillDir, 'SKILL.md');
@@ -99,10 +110,10 @@ function runUpgrade({ cwd = process.cwd(), flags = {} } = {}) {
   // 3. Update .<targetCli>/rules/ if rules directory exists or cfg.full is true
   const rulesDir = path.join(cwd, targetHiddenDir, 'rules');
   const legacyRulesDir = path.join(cwd, 'rules');
+  const builtInRules = renderRules({ lang, cliName: targetCli });
   if (fs.existsSync(rulesDir) || fs.existsSync(legacyRulesDir) || cfg.full) {
-    const rules = renderRules({ lang, cliName: targetCli });
     if (!isDryRun) ensureDir(rulesDir);
-    for (const [rname, rcontent] of Object.entries(rules)) {
+    for (const [rname, rcontent] of Object.entries(builtInRules)) {
       actions.push({ type: 'update', file: `${targetHiddenDir}/rules/${rname}` });
       if (!isDryRun) {
         fs.writeFileSync(path.join(rulesDir, rname), rcontent, 'utf8');
@@ -110,13 +121,21 @@ function runUpgrade({ cwd = process.cwd(), flags = {} } = {}) {
     }
   }
 
-  // 3b. Clean up legacy visible root AGENTS.md, skills/, and rules/ after migrating into .<targetCli>/
+  // 3b. Safe migration of root AGENTS.md, skills/, and rules/ into .<targetCli>/
+  // NEVER delete user-authored custom AGENTS.md or custom files in rules/ without preserving them!
   if (fs.existsSync(legacyAgentsPath)) {
-    actions.push({ type: 'migrate', file: `AGENTS.md -> ${targetHiddenDir}/AGENTS.md` });
-    if (!isDryRun) {
-      fs.rmSync(legacyAgentsPath, { force: true });
+    const legacyContent = fs.readFileSync(legacyAgentsPath, 'utf8');
+    if (isToolGeneratedContent(legacyContent)) {
+      actions.push({ type: 'migrate', file: `AGENTS.md -> ${targetHiddenDir}/AGENTS.md` });
+      if (!isDryRun) {
+        fs.rmSync(legacyAgentsPath, { force: true });
+      }
+    } else {
+      // User-authored custom root AGENTS.md: keep it intact at root so user data is never lost!
+      actions.push({ type: 'preserve', file: 'AGENTS.md (custom user file preserved)' });
     }
   }
+
   const legacySkillsRoot = path.join(cwd, 'skills');
   for (const legacyName of new Set([CLI_NAME, targetCli])) {
     const legacySkillDir = path.join(legacySkillsRoot, legacyName);
@@ -130,9 +149,29 @@ function runUpgrade({ cwd = process.cwd(), flags = {} } = {}) {
   if (!isDryRun && fs.existsSync(legacySkillsRoot) && fs.readdirSync(legacySkillsRoot).length === 0) {
     fs.rmSync(legacySkillsRoot, { recursive: true, force: true });
   }
+
   if (fs.existsSync(legacyRulesDir)) {
-    actions.push({ type: 'migrate', file: `rules/ -> ${targetHiddenDir}/rules/` });
-    if (!isDryRun) {
+    if (!isDryRun) ensureDir(rulesDir);
+    for (const entry of fs.readdirSync(legacyRulesDir, { withFileTypes: true })) {
+      const legacyFile = path.join(legacyRulesDir, entry.name);
+      if (entry.isFile()) {
+        const content = fs.readFileSync(legacyFile, 'utf8');
+        const isBuiltInName = Object.prototype.hasOwnProperty.call(builtInRules, entry.name);
+        if (isBuiltInName && isToolGeneratedContent(content)) {
+          actions.push({ type: 'migrate', file: `rules/${entry.name} -> ${targetHiddenDir}/rules/${entry.name}` });
+          if (!isDryRun) {
+            fs.rmSync(legacyFile, { force: true });
+          }
+        } else {
+          // User-authored custom rule file: copy to .<targetCli>/rules/ AND preserve in root rules/!
+          actions.push({ type: 'preserve', file: `rules/${entry.name} (custom user rule preserved)` });
+          if (!isDryRun && !fs.existsSync(path.join(rulesDir, entry.name))) {
+            fs.copyFileSync(legacyFile, path.join(rulesDir, entry.name));
+          }
+        }
+      }
+    }
+    if (!isDryRun && fs.existsSync(legacyRulesDir) && fs.readdirSync(legacyRulesDir).length === 0) {
       fs.rmSync(legacyRulesDir, { recursive: true, force: true });
     }
   }
@@ -191,12 +230,6 @@ function runUpgrade({ cwd = process.cwd(), flags = {} } = {}) {
       mode,
       full: fs.existsSync(rulesDir) || cfg.full
     }, targetCfgFile);
-    if (targetCli !== 'genaitool') {
-      const legacyMetaCfg = path.join(cwd, '.genaitool.json');
-      if (fs.existsSync(legacyMetaCfg)) {
-        fs.rmSync(legacyMetaCfg, { force: true });
-      }
-    }
   }
 
   for (const act of actions) {

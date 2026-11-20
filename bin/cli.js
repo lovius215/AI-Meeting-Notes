@@ -13,6 +13,7 @@ const { runUpgrade } = require('../src/upgrade');
 const { runStatus } = require('../src/status');
 const { runScaffold } = require('../src/scaffold');
 const { runBuild } = require('../src/build');
+const { createMeeting, inspectMeetingDirectory, generateDeliverableFromTemplate } = require('../src/meeting');
 
 function printHelp(lang = 'zh-TW') {
   console.log(`
@@ -111,6 +112,64 @@ function main(argv = process.argv.slice(2)) {
       }
       const res = runScaffold({ cwd, target, flags });
       return res.ok ? 0 : 1;
+    }
+    case 'meeting':
+    case 'new-meeting': {
+      const fs = require('node:fs');
+      const project = flags.project || target || 'Project-A';
+      const title = flags.title || positional[2] || 'Weekly-Sync';
+      const date = flags.date || new Date().toISOString().slice(0, 10);
+      const transcriptText = flags.transcript && fs.existsSync(flags.transcript)
+        ? fs.readFileSync(flags.transcript, 'utf8')
+        : '';
+      let mapping = {};
+      if (flags.map) {
+        for (const pair of String(flags.map).split(',')) {
+          const [k, v] = pair.split('=');
+          if (k && v) mapping[k.trim()] = v.trim();
+        }
+      }
+      const res = createMeeting({
+        cwd,
+        project,
+        title,
+        date,
+        mediaFile: flags.media || null,
+        transcriptText,
+        mapping
+      });
+      console.log(`✅ Meeting created: ${res.meetingDir}`);
+      return res.ok ? 0 : 1;
+    }
+    case 'inspect': {
+      const path = require('node:path');
+      const meetingDir = target
+        ? (path.isAbsolute(target) ? target : path.join(cwd, target))
+        : cwd;
+      const res = inspectMeetingDirectory(meetingDir);
+      console.log(JSON.stringify(res, null, 2));
+      return res.ok ? 0 : 1;
+    }
+    case 'deliverable': {
+      const path = require('node:path');
+      const meetingDir = flags.meeting
+        ? (path.isAbsolute(flags.meeting) ? flags.meeting : path.join(cwd, flags.meeting))
+        : cwd;
+      const templatePath = flags.template
+        ? (path.isAbsolute(flags.template) ? flags.template : path.join(cwd, flags.template))
+        : '';
+      const res = generateDeliverableFromTemplate({
+        meetingDir,
+        templatePath,
+        outputName: flags.out || 'deliverable.md',
+        values: flags
+      });
+      if (!res.ok) {
+        console.error(res.error);
+        return 1;
+      }
+      console.log(`✅ Deliverable generated: ${res.outputPath}`);
+      return 0;
     }
     default: {
       console.error(`Unknown command: "${cmd}". Run "${CLI_NAME} --help" for available commands.`);

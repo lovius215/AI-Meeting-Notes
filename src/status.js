@@ -24,6 +24,7 @@ function runSelfCheck(repoRoot) {
     'src/status.js',
     'src/scaffold.js',
     'src/build.js',
+    'src/meeting.js',
     'templates/gitignore.template',
     'scripts/install.sh',
     'scripts/update.sh',
@@ -108,6 +109,13 @@ function runStatus({ cwd = process.cwd(), subcommand = 'status', flags = {} } = 
   for (const sd of stageDetails) {
     const badge = sd.ok ? '✅ Ready' : `⏳ Pending (${sd.issueCount} placeholder/ref issues)`;
     console.log(`    * ${sd.file}: ${badge}`);
+  }
+
+  // Also report meetings/ knowledge base status if meetings/ exists
+  const meetingsDir = path.join(cwd, 'meetings');
+  if (fs.existsSync(meetingsDir)) {
+    const projects = fs.readdirSync(meetingsDir, { withFileTypes: true }).filter((d) => d.isDirectory());
+    console.log(`  - Meetings Knowledge Base (meetings/): ${projects.length} project(s)`);
   }
 
   if (subcommand === 'doctor') {

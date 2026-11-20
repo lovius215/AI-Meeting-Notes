@@ -19,16 +19,36 @@ function ensureDir(dirPath) {
   }
 }
 
+function isToolGeneratedContent(content) {
+  if (!content) return false;
+  return (
+    content.includes('Powered by `@loviusc/') ||
+    content.includes('的專屬 AI') ||
+    content.includes('的专属 AI') ||
+    content.includes('dedicated AI assistant for `@loviusc/') ||
+    content.includes('の専属 AI アシスタント') ||
+    content.includes('의 전담 AI 어시스턴트') ||
+    content.includes('# Legacy\n') ||
+    content.includes('# Legacy Skill') ||
+    content.includes('# Legacy Rule') ||
+    content.includes('Single-Language Purity & Technical Term Preservation') ||
+    content.includes('0-Token Anti-Hallucination & Verification Rule') ||
+    content.includes('Conversational vs. CLI Tool Design Rule') ||
+    content.includes('Safe Git Archiving & Conflict Protection Rule') ||
+    content.includes('Existing Logic Invariants & Anti-Regression Guardrails')
+  );
+}
+
 function readConfig(cwd = process.cwd()) {
   const cfgPath = path.join(cwd, CONFIG_FILENAME);
   if (fs.existsSync(cfgPath)) {
     try {
       const data = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
       return {
+        ...data,
         lang: SUPPORTED_LANGS.includes(data.lang) ? data.lang : DEFAULT_LANG,
         mode: TOOL_MODES.includes(data.mode) ? data.mode : DEFAULT_MODE,
-        full: Boolean(data.full),
-        ...data
+        full: Boolean(data.full)
       };
     } catch (_) {
       // Fallback to detection below
@@ -173,6 +193,7 @@ function parseCliArgs(argv) {
 
 module.exports = {
   ensureDir,
+  isToolGeneratedContent,
   readConfig,
   writeConfig,
   extractClaudeMemContext,

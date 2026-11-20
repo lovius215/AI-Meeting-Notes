@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Central Configuration for @loviusc/genaitool
+ * Central Configuration for @loviusc/ai-meeting-notes (meetnotes)
  * Extracted as variables so derived tools can modify a single file.
  */
 const PACKAGE_NAME = process.env.GENAITOOL_PACKAGE_NAME || '@loviusc/ai-meeting-notes';

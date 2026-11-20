@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { spawnSync } = require('node:child_process');
+const { CLI_NAME } = require('./config');
 const { ensureDir, readConfig } = require('./utils');
 const { t } = require('./i18n');
 const { resolveTargets } = require('./verify');
@@ -17,20 +18,54 @@ function escapeHtml(str) {
     .replace(/"/g, '&quot;');
 }
 
+function sanitizeLinkUrl(rawUrl) {
+  const trimmed = String(rawUrl || '').trim();
+  const decoded = trimmed.replace(/&amp;/g, '&');
+  if (/^\s*(?:javascript|vbscript|data):/i.test(decoded)) {
+    return '#';
+  }
+  return trimmed;
+}
+
 function formatInlineMarkdown(text) {
-  let out = escapeHtml(text);
-  // Inline code
-  out = out.replace(/`([^`]+)`/g, '<code>$1</code>');
-  // Bold
+  // 1. Extract inline code spans first so *, **, or [...] inside `code` are NEVER mutated!
+  const codeTokens = [];
+  const withCodePlaceholders = String(text).replace(/`([^`]+)`/g, (_, codeInner) => {
+    const idx = codeTokens.length;
+    codeTokens.push(`<code>${escapeHtml(codeInner)}</code>`);
+    return `\x00CODE_${idx}\x00`;
+  });
+
+  let out = escapeHtml(withCodePlaceholders);
+
+  // 2. Bold & Italic (outside inline code)
   out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  // Italic
   out = out.replace(/\*([^*]+)\*/g, '<em>$1</em>');
-  // Checkboxes
+
+  // 3. Checkboxes
   out = out.replace(/^\[x\]\s+/i, '☑️ ');
   out = out.replace(/^\[\s\]\s+/, '⬜ ');
-  // Links
-  out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
+
+  // 4. Links (support balanced one-level parentheses in URLs & filter dangerous protocols)
+  out = out.replace(/\[([^\]]+)\]\(([^()\s]+(?:\([^()]*\)[^()\s]*)*)\)/g, (_, label, url) => {
+    const safeUrl = sanitizeLinkUrl(url);
+    return `<a href="${safeUrl}">${label}</a>`;
+  });
+
+  // 5. Restore inline code tokens
+  out = out.replace(/\x00CODE_(\d+)\x00/g, (_, idx) => codeTokens[Number(idx)] || '');
   return out;
+}
+
+function splitTableCells(rawRow) {
+  const escapedPipePlaceholder = '\x00ESCAPED_PIPE\x00';
+  const protectedRow = rawRow
+    .trim()
+    .replace(/^\||\|$/g, '')
+    .replace(/\\\|/g, escapedPipePlaceholder);
+  return protectedRow
+    .split('|')
+    .map((c) => c.replace(/\x00ESCAPED_PIPE\x00/g, '|').trim());
 }
 
 /**
@@ -41,15 +76,19 @@ function markdownToHtmlBody(md) {
   const html = [];
   let inCodeBlock = false;
   let codeBuffer = [];
-  let inList = false;
+  const listStack = []; // Array of { type: 'ul' | 'ol', indent: number }
   let inTable = false;
   let tableHeaderDone = false;
 
-  const closeOpenBlocks = () => {
-    if (inList) {
-      html.push('</ul>');
-      inList = false;
+  const closeListStack = () => {
+    while (listStack.length > 0) {
+      const popped = listStack.pop();
+      html.push(`</${popped.type}>`);
     }
+  };
+
+  const closeOpenBlocks = () => {
+    closeListStack();
     if (inTable) {
       html.push('</tbody></table>');
       inTable = false;
@@ -80,15 +119,8 @@ function markdownToHtmlBody(md) {
 
     // Table rows
     if (/^\s*\|.*\|\s*$/.test(raw)) {
-      if (inList) {
-        html.push('</ul>');
-        inList = false;
-      }
-      const cells = raw
-        .trim()
-        .replace(/^\||\|$/g, '')
-        .split('|')
-        .map((c) => c.trim());
+      closeListStack();
+      const cells = splitTableCells(raw);
 
       // Check if separator line like | :--- | :--- |
       if (cells.every((c) => /^:?-{2,}:?$/.test(c))) {
@@ -142,20 +174,34 @@ function markdownToHtmlBody(md) {
       continue;
     }
 
-    // List items
-    const listMatch = raw.match(/^\s*(?:[-*+]|\d+\.)\s+(.*)$/);
+    // List items (supports ordered <ol>, unordered <ul>, and nested indentation)
+    const listMatch = raw.match(/^(\s*)([-*+]|\d+\.)\s+(.*)$/);
     if (listMatch) {
-      if (!inList) {
-        inList = true;
-        html.push('<ul>');
+      const indent = listMatch[1].replace(/\t/g, '  ').length;
+      const listType = /^\d+\.$/.test(listMatch[2]) ? 'ol' : 'ul';
+      const itemContent = listMatch[3];
+
+      while (listStack.length > 0 && indent < listStack[listStack.length - 1].indent) {
+        const popped = listStack.pop();
+        html.push(`</${popped.type}>`);
       }
-      html.push(`<li>${formatInlineMarkdown(listMatch[1])}</li>`);
-      continue;
-    } else if (inList && raw.trim() === '') {
-      html.push('</ul>');
-      inList = false;
+
+      if (listStack.length === 0 || indent > listStack[listStack.length - 1].indent) {
+        listStack.push({ type: listType, indent });
+        html.push(`<${listType}>`);
+      } else if (listStack[listStack.length - 1].type !== listType) {
+        const popped = listStack.pop();
+        html.push(`</${popped.type}>`);
+        listStack.push({ type: listType, indent });
+        html.push(`<${listType}>`);
+      }
+
+      html.push(`<li>${formatInlineMarkdown(itemContent)}</li>`);
       continue;
     }
+
+    // Non-list line: always close any open list so paragraphs are never placed inside <ul>/<ol>
+    closeListStack();
 
     if (raw.trim() === '') {
       continue;
@@ -221,6 +267,9 @@ function buildA4HtmlDocument(sections, title = 'Document') {
       padding: 12px;
       border-radius: 6px;
       overflow-x: auto;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      overflow-wrap: anywhere;
       page-break-inside: avoid;
     }
     pre code {
@@ -305,10 +354,9 @@ function findBrowserExecutable() {
 }
 
 function convertHtmlToPdf(htmlPath, pdfPath) {
-  // 1. Try Headless Chrome / Edge with isolated --user-data-dir
   const browserBin = findBrowserExecutable();
   if (browserBin) {
-    const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'genaitool-chrome-profile-'));
+    const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), `${CLI_NAME}-chrome-profile-`));
     try {
       const fileUrl = pathToFileURL(htmlPath).href;
       const args = [
@@ -331,7 +379,6 @@ function convertHtmlToPdf(htmlPath, pdfPath) {
     }
   }
 
-  // 2. Try wkhtmltopdf
   const wkCheck = spawnSync(os.platform() === 'win32' ? 'where' : 'which', ['wkhtmltopdf'], { encoding: 'utf8' });
   if (wkCheck.status === 0 && wkCheck.stdout.trim()) {
     const wkBin = wkCheck.stdout.trim().split(/\r?\n/)[0];
@@ -344,7 +391,6 @@ function convertHtmlToPdf(htmlPath, pdfPath) {
     }
   }
 
-  // 3. Try macOS cupsfilter
   if (os.platform() === 'darwin' && fs.existsSync('/usr/sbin/cupsfilter')) {
     const res = spawnSync('/usr/sbin/cupsfilter', [htmlPath], {
       encoding: 'buffer',
@@ -363,6 +409,15 @@ function convertHtmlToPdf(htmlPath, pdfPath) {
 function runPdf({ cwd = process.cwd(), target = null, flags = {} } = {}) {
   const cfg = readConfig(cwd);
   const lang = cfg.lang;
+  const htmlOnly = Boolean(flags.html);
+
+  if (cfg.features && !flags.force) {
+    if (!htmlOnly && cfg.features.pdf === false) {
+      const msg = 'PDF export is disabled in workspace config (--no-pdf). Pass --force to override.';
+      console.error(msg);
+      return { ok: false, reason: 'feature_disabled', error: msg };
+    }
+  }
 
   console.log(t(lang, 'pdfStart'));
 
@@ -374,8 +429,7 @@ function runPdf({ cwd = process.cwd(), target = null, flags = {} } = {}) {
   }
 
   const shouldMerge = Boolean(flags.merge) || (files.length === 1 && Boolean(flags.output));
-  const htmlOnly = Boolean(flags.html);
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'genaitool-pdf-html-'));
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `${CLI_NAME}-pdf-html-`));
 
   try {
     if (shouldMerge || files.length === 1) {

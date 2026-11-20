@@ -5,14 +5,36 @@ const path = require('node:path');
 const { readConfig } = require('./utils');
 const { t } = require('./i18n');
 
+function collectMarkdownFilesRecursive(dirPath, { skipTemplates = true } = {}) {
+  if (!fs.existsSync(dirPath)) return [];
+  const results = [];
+  const entries = fs.readdirSync(dirPath, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
+  for (const entry of entries) {
+    if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
+    if (skipTemplates && entry.isDirectory() && entry.name === 'templates') continue;
+    const fullPath = path.join(dirPath, entry.name);
+    if (entry.isDirectory()) {
+      results.push(...collectMarkdownFilesRecursive(fullPath, { skipTemplates }));
+    } else if (entry.isFile() && entry.name.endsWith('.md')) {
+      results.push(fullPath);
+    }
+  }
+  return results;
+}
+
 function resolveTargets(cwd, targetArg) {
   const projDir = path.join(cwd, 'project');
+  const meetingsDir = path.join(cwd, 'meetings');
+
   if (!targetArg) {
-    if (!fs.existsSync(projDir)) return [];
-    return fs.readdirSync(projDir)
-      .filter((f) => f.endsWith('.md'))
-      .sort()
-      .map((f) => path.join(projDir, f));
+    const targets = [];
+    if (fs.existsSync(meetingsDir)) {
+      targets.push(...collectMarkdownFilesRecursive(meetingsDir, { skipTemplates: true }));
+    }
+    if (fs.existsSync(projDir)) {
+      targets.push(...collectMarkdownFilesRecursive(projDir, { skipTemplates: true }));
+    }
+    return targets;
   }
 
   // Check if targetArg is stage id like "01" or "1"
@@ -28,18 +50,27 @@ function resolveTargets(cwd, targetArg) {
   if (fs.existsSync(directPath)) {
     const stat = fs.statSync(directPath);
     if (stat.isDirectory()) {
-      return fs.readdirSync(directPath)
-        .filter((f) => f.endsWith('.md'))
-        .sort()
-        .map((f) => path.join(directPath, f));
+      return collectMarkdownFilesRecursive(directPath, { skipTemplates: true });
     }
     return [directPath];
+  }
+
+  // Also check inside meetings/
+  const inMeetings = path.join(meetingsDir, targetArg);
+  if (fs.existsSync(inMeetings)) {
+    const stat = fs.statSync(inMeetings);
+    return stat.isDirectory()
+      ? collectMarkdownFilesRecursive(inMeetings, { skipTemplates: true })
+      : [inMeetings];
   }
 
   // Also check inside project/
   const inProj = path.join(projDir, targetArg);
   if (fs.existsSync(inProj)) {
-    return [inProj];
+    const stat = fs.statSync(inProj);
+    return stat.isDirectory()
+      ? collectMarkdownFilesRecursive(inProj, { skipTemplates: true })
+      : [inProj];
   }
 
   return [];
@@ -80,19 +111,20 @@ function verifyFile(filePath, cwd) {
     }
 
     // 2. Check source file & line references (#L10 or #L10-L20)
-    // Match either markdown link (path#L10-L20) or bare path/file.ext#L10-L20
+    // Strip remote HTTP/HTTPS URLs first so GitHub permalinks (https://github.com/.../a.js#L1-L2) never trigger local file errors
+    const lineWithoutRemoteUrls = lineWithoutInlineCode.replace(/https?:\/\/[^\s)\]>]+/gi, '');
+
     const refRegex = /(?:file:\/\/)?([A-Za-z0-9_./\\:-]+?\.[A-Za-z0-9]+)#L(\d+)(?:-L?(\d+))?/g;
     let rMatch;
-    while ((rMatch = refRegex.exec(lineWithoutInlineCode)) !== null) {
+    while ((rMatch = refRegex.exec(lineWithoutRemoteUrls)) !== null) {
       const fullRef = rMatch[0];
       const refPathStr = rMatch[1];
       const startLine = parseInt(rMatch[2], 10);
       const endLine = rMatch[3] ? parseInt(rMatch[3], 10) : startLine;
 
-      // Skip HTTP/HTTPS URLs
-      const prefixIdx = rMatch.index;
-      const before = lineWithoutInlineCode.slice(Math.max(0, prefixIdx - 8), prefixIdx);
-      if (/https?:\/\//i.test(before)) continue;
+      if (/^(?:https?|ftp|mailto):/i.test(fullRef) || /^(?:https?|ftp|mailto):/i.test(refPathStr)) {
+        continue;
+      }
 
       let resolvedRef = null;
       if (fullRef.startsWith('file://')) {
@@ -100,14 +132,14 @@ function verifyFile(filePath, cwd) {
           ? refPathStr.replace(/^\/([A-Za-z]:)/, '$1')
           : refPathStr;
       } else {
-        const candidateFromCwd = path.resolve(cwd, refPathStr);
         const candidateFromDoc = path.resolve(path.dirname(filePath), refPathStr);
-        if (fs.existsSync(candidateFromCwd)) {
-          resolvedRef = candidateFromCwd;
-        } else if (fs.existsSync(candidateFromDoc)) {
+        const candidateFromCwd = path.resolve(cwd, refPathStr);
+        if (fs.existsSync(candidateFromDoc)) {
           resolvedRef = candidateFromDoc;
-        } else {
+        } else if (fs.existsSync(candidateFromCwd)) {
           resolvedRef = candidateFromCwd;
+        } else {
+          resolvedRef = candidateFromDoc;
         }
       }
 
@@ -122,7 +154,8 @@ function verifyFile(filePath, cwd) {
       }
 
       const targetContent = fs.readFileSync(resolvedRef, 'utf8');
-      const targetLines = targetContent.split(/\r?\n/).length;
+      const normalizedTarget = targetContent.replace(/\r?\n$/, '');
+      const targetLines = normalizedTarget.length === 0 ? 0 : normalizedTarget.split(/\r?\n/).length;
       if (startLine < 1 || endLine < startLine || endLine > targetLines) {
         issues.push({
           type: 'broken_lines',
@@ -185,5 +218,6 @@ function runVerify({ cwd = process.cwd(), target = null, silent = false } = {}) 
 module.exports = {
   runVerify,
   verifyFile,
-  resolveTargets
+  resolveTargets,
+  collectMarkdownFilesRecursive
 };

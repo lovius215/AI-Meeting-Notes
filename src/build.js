@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { DEFAULT_LANG, SUPPORTED_LANGS, TOOL_MODES, CLI_NAME, HIDDEN_DIR, CONFIG_FILENAME } = require('./config');
+const { DEFAULT_LANG, SUPPORTED_LANGS, TOOL_MODES, PACKAGE_NAME, CLI_NAME, HIDDEN_DIR, CONFIG_FILENAME } = require('./config');
 const { readConfig } = require('./utils');
 const { t } = require('./i18n');
 const { runVerify } = require('./verify');
@@ -69,13 +69,19 @@ function runBuild({ cwd = process.cwd(), subcommand = 'build', flags = {} } = {}
   const specMeta = parseSpecMetadata(cwd);
   const dirBase = path.basename(cwd).replace(/[^a-z0-9-]/gi, '').toLowerCase() || 'my-ai-tool';
 
+  const isMotherPkg = (name) => !name || name === PACKAGE_NAME || name === '@loviusc/genaitool';
+  const isMotherCli = (cli) => !cli || cli === CLI_NAME || cli === 'genaitool';
+
   const rawPkg = flags.name
     || specMeta.pkgName
-    || (wsCfg.packageName && wsCfg.packageName !== '@loviusc/genaitool' ? wsCfg.packageName : null)
+    || (!isMotherPkg(wsCfg.packageName) ? wsCfg.packageName : null)
     || `@loviusc/${dirBase}`;
   const cleanShortName = rawPkg.includes('/') ? rawPkg.split('/').pop() : rawPkg;
   const pkgName = rawPkg.startsWith('@') ? rawPkg : `@loviusc/${cleanShortName}`;
-  const cliName = flags.cli || specMeta.cliName || (wsCfg.cliName !== 'genaitool' ? wsCfg.cliName : null) || cleanShortName;
+  const cliName = flags.cli
+    || specMeta.cliName
+    || (!isMotherCli(wsCfg.cliName) ? wsCfg.cliName : null)
+    || cleanShortName.replace(/[^a-z0-9-]/gi, '').toLowerCase();
   const mode = TOOL_MODES.includes(flags.mode)
     ? flags.mode
     : (specMeta.mode || wsCfg.mode || 'cli');
@@ -100,17 +106,19 @@ function runBuild({ cwd = process.cwd(), subcommand = 'build', flags = {} } = {}
     hideSkillsRules
   });
 
-  // Clean up genaitool's own meta-agent & hidden skill/rules from the generated npm project when assembling in-place
-  if (path.resolve(outDir) === path.resolve(cwd) && cliName !== 'genaitool') {
-    for (const hDir of new Set(['.genaitool', ...(cliName !== CLI_NAME ? [HIDDEN_DIR] : [])])) {
+  // Clean up mother meta-agent & hidden skill/rules from the generated npm project when assembling in-place
+  if (path.resolve(outDir) === path.resolve(cwd) && (cliName !== CLI_NAME || cliName !== 'genaitool')) {
+    for (const hDir of new Set(['.genaitool', ...(cliName !== CLI_NAME ? [HIDDEN_DIR] : []), `.${cliName}`])) {
       const metaHiddenDir = path.join(outDir, hDir);
       if (fs.existsSync(metaHiddenDir)) {
         fs.rmSync(metaHiddenDir, { recursive: true, force: true });
       }
     }
-    const metaSkillDir = path.join(outDir, 'skills', 'genaitool');
-    if (fs.existsSync(metaSkillDir)) {
-      fs.rmSync(metaSkillDir, { recursive: true, force: true });
+    for (const sName of new Set(['genaitool', CLI_NAME, cliName])) {
+      const metaSkillDir = path.join(outDir, 'skills', sName);
+      if (fs.existsSync(metaSkillDir)) {
+        fs.rmSync(metaSkillDir, { recursive: true, force: true });
+      }
     }
     const skillsRoot = path.join(outDir, 'skills');
     if (fs.existsSync(skillsRoot) && fs.readdirSync(skillsRoot).length === 0) {
@@ -119,11 +127,11 @@ function runBuild({ cwd = process.cwd(), subcommand = 'build', flags = {} } = {}
     const metaAgentsPath = path.join(outDir, 'AGENTS.md');
     if (fs.existsSync(metaAgentsPath)) {
       const agentsContent = fs.readFileSync(metaAgentsPath, 'utf8');
-      if (agentsContent.includes('genaitool') || agentsContent.includes('@loviusc/genaitool') || agentsContent.includes(CLI_NAME)) {
+      if (agentsContent.includes('genaitool') || agentsContent.includes(PACKAGE_NAME) || agentsContent.includes(CLI_NAME)) {
         fs.rmSync(metaAgentsPath, { force: true });
       }
     }
-    for (const cFile of new Set(['.genaitool.json', ...(cliName !== CLI_NAME ? [CONFIG_FILENAME] : [])])) {
+    for (const cFile of new Set(['.genaitool.json', CONFIG_FILENAME, `.${cliName}.json`])) {
       const metaCfgPath = path.join(outDir, cFile);
       if (fs.existsSync(metaCfgPath)) {
         fs.rmSync(metaCfgPath, { force: true });
@@ -146,7 +154,7 @@ function runBuild({ cwd = process.cwd(), subcommand = 'build', flags = {} } = {}
     const packRes = spawnSync(npmBin, packArgs, {
       cwd: outDir,
       encoding: 'utf8',
-      env: { ...process.env, npm_config_cache: path.join(os.tmpdir(), 'genaitool-npm-cache') }
+      env: { ...process.env, npm_config_cache: path.join(os.tmpdir(), `${CLI_NAME}-npm-cache`) }
     });
     if (packRes.status !== 0) {
       console.error(packRes.stderr || packRes.stdout);

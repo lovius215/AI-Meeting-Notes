@@ -6,18 +6,24 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { CLI_NAME, HIDDEN_DIR } = require('../src/config');
-const { parseCliArgs } = require('../src/utils');
+const { CLI_NAME, HIDDEN_DIR, CONFIG_FILENAME } = require('../src/config');
+const { parseCliArgs, readConfig } = require('../src/utils');
 const { getInitPrompts } = require('../src/i18n');
 const { promptInitFeatures } = require('../bin/cli');
 const { runInit } = require('../src/init');
 const { runVerify } = require('../src/verify');
 const { runCommit } = require('../src/commit');
 const { runUpgrade } = require('../src/upgrade');
-const { runPdf, buildA4HtmlDocument } = require('../src/pdf');
+const { runPdf, buildA4HtmlDocument, markdownToHtmlBody } = require('../src/pdf');
 const { runStatus, runSelfCheck } = require('../src/status');
 const { runScaffold } = require('../src/scaffold');
 const { runBuild } = require('../src/build');
+const {
+  applySpeakerMapping,
+  createMeeting,
+  generateDeliverableFromTemplate,
+  inspectMeetingDirectory
+} = require('../src/meeting');
 
 function makeTempDir(prefix = 'genaitool-test-') {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -463,4 +469,189 @@ test('10. interactive init prompts support all 5 languages for Git/PDF/HTML/npm'
   });
   assert.equal(asked.length, 4);
   assert.equal(res['no-npm'], true);
+});
+
+test('11. comprehensive fixes: 5-lang meeting rules, safe upgrade/re-init, recursive meetings/ verify/pdf, permalink/newline line check, markdown renderer & deterministic meeting engine', () => {
+  // 11a. All 5 languages get complete meeting-specific AGENTS.md & SKILL.md (meetings/, 01-transcript.md, SPEAKER_00, deliverables/, 🟢/🟡/🔴)
+  for (const lang of ['zh-TW', 'zh-CN', 'en', 'ja', 'ko']) {
+    const langDir = makeTempDir(`meetnotes-lang-${lang}-`);
+    try {
+      runInit({ cwd: langDir, flags: { full: true, lang, mode: 'conversational', 'no-git': true } });
+      assert.equal(fs.existsSync(path.join(langDir, 'meetings')), true);
+      const agentsMd = fs.readFileSync(path.join(langDir, HIDDEN_DIR, 'AGENTS.md'), 'utf8');
+      const skillMd = fs.readFileSync(path.join(langDir, HIDDEN_DIR, 'skills', CLI_NAME, 'SKILL.md'), 'utf8');
+      for (const keyword of ['meetings/', '01-transcript.md', '02-summary.md', '03-todos-and-discussion.md', 'SPEAKER_00', 'deliverables/', '🟢', '🟡', '🔴']) {
+        assert.equal(agentsMd.includes(keyword), true, `AGENTS.md (${lang}) missing ${keyword}`);
+        assert.equal(skillMd.includes(keyword), true, `SKILL.md (${lang}) missing ${keyword}`);
+      }
+    } finally {
+      fs.rmSync(langDir, { recursive: true, force: true });
+    }
+  }
+
+  // 11b. Re-running init preserves locked language and does NOT overwrite customized AGENTS.md / SKILL.md unless --force
+  const reInitDir = makeTempDir('meetnotes-reinit-');
+  try {
+    runInit({ cwd: reInitDir, flags: { full: true, lang: 'ja', 'no-git': true } });
+    const agentsPath = path.join(reInitDir, HIDDEN_DIR, 'AGENTS.md');
+    const skillPath = path.join(reInitDir, HIDDEN_DIR, 'skills', CLI_NAME, 'SKILL.md');
+    fs.appendFileSync(agentsPath, '\n# MY_CUSTOM_AGENT_RULE_123\n', 'utf8');
+    fs.appendFileSync(skillPath, '\n# MY_CUSTOM_SKILL_RULE_456\n', 'utf8');
+
+    const secondInit = runInit({ cwd: reInitDir, flags: { 'no-git': true } });
+    assert.equal(secondInit.lang, 'ja');
+    assert.equal(readConfig(reInitDir).lang, 'ja');
+    assert.match(fs.readFileSync(agentsPath, 'utf8'), /MY_CUSTOM_AGENT_RULE_123/);
+    assert.match(fs.readFileSync(skillPath, 'utf8'), /MY_CUSTOM_SKILL_RULE_456/);
+
+    // Also verify readConfig rejects invalid lang like "fr" and falls back safely
+    fs.writeFileSync(path.join(reInitDir, CONFIG_FILENAME), JSON.stringify({ lang: 'fr', mode: 'invalid-mode' }), 'utf8');
+    const safeCfg = readConfig(reInitDir);
+    assert.equal(safeCfg.lang, 'zh-TW');
+    assert.equal(safeCfg.mode, 'conversational');
+  } finally {
+    fs.rmSync(reInitDir, { recursive: true, force: true });
+  }
+
+  // 11c. upgrade preserves user-authored root AGENTS.md & custom rules/*.md, and allows normal user package.json
+  const upgDir = makeTempDir('meetnotes-safe-upg-');
+  try {
+    runInit({ cwd: upgDir, flags: { full: true, lang: 'en', 'no-git': true } });
+    // User has their own web app package.json (no bin/cli.js)
+    fs.writeFileSync(path.join(upgDir, 'package.json'), JSON.stringify({ name: 'my-company-webapp', version: '1.0.0' }), 'utf8');
+    // User has their own custom root AGENTS.md and custom rules/team-style.md
+    const customRootAgents = '# Team Custom AGENTS.md\nUser authored instructions that must never be deleted.\n';
+    fs.writeFileSync(path.join(upgDir, 'AGENTS.md'), customRootAgents, 'utf8');
+    fs.mkdirSync(path.join(upgDir, 'rules'), { recursive: true });
+    fs.writeFileSync(path.join(upgDir, 'rules', 'team-style.md'), '# Team Style Rule\nKeep this file safe!\n', 'utf8');
+
+    const upgRes = runUpgrade({ cwd: upgDir });
+    assert.equal(upgRes.ok, true);
+    assert.equal(fs.existsSync(path.join(upgDir, 'AGENTS.md')), true);
+    assert.equal(fs.readFileSync(path.join(upgDir, 'AGENTS.md'), 'utf8'), customRootAgents);
+    assert.equal(fs.existsSync(path.join(upgDir, 'rules', 'team-style.md')), true);
+    assert.equal(fs.existsSync(path.join(upgDir, HIDDEN_DIR, 'rules', 'team-style.md')), true);
+  } finally {
+    fs.rmSync(upgDir, { recursive: true, force: true });
+  }
+
+  // 11d. verify GitHub permalink exclusion & exact trailing-newline line count + recursive meetings/ verify & pdf
+  const meetWorkspace = makeTempDir('meetnotes-engine-');
+  try {
+    runInit({ cwd: meetWorkspace, flags: { full: true, lang: 'zh-TW', 'no-git': true } });
+    // Remove unfilled project/ templates to simulate a pure meetings/ workspace
+    fs.rmSync(path.join(meetWorkspace, 'project'), { recursive: true, force: true });
+
+    // Create a 3-line file with trailing newline
+    fs.writeFileSync(path.join(meetWorkspace, 'three.txt'), 'line1\nline2\nline3\n', 'utf8');
+
+    // Create Meeting 1 (2026-11-13) and Meeting 2 (2026-11-20) with SRT transcript, speaker mapping, and media file
+    const dummyMedia = path.join(meetWorkspace, 'sample.mp3');
+    fs.writeFileSync(dummyMedia, 'FAKE_MP3_BINARY_CONTENT', 'utf8');
+
+    const m1 = createMeeting({
+      cwd: meetWorkspace,
+      project: 'Project-A',
+      title: 'Kickoff',
+      date: '2026-11-13',
+      transcriptText: '1\n00:00:10,000 --> 00:00:15,000\nSPEAKER_00: 我們決定預計上線日鎖定在 12/01。\n',
+      mapping: { SPEAKER_00: '王經理 (PM)' }
+    });
+    assert.equal(m1.ok, true);
+    fs.appendFileSync(path.join(m1.meetingDir, '02-summary.md'), '\n- **預計上線日**：2026-12-01 (來源：[01-transcript.md](./01-transcript.md#L1-L10))\n', 'utf8');
+
+    const m2 = createMeeting({
+      cwd: meetWorkspace,
+      project: 'Project-A',
+      title: 'Weekly-Sync',
+      date: '2026-11-20',
+      mediaFile: dummyMedia,
+      transcriptText: '1\n00:01:00,000 --> 00:01:05,000\nSPEAKER_00: 我們把拼字錯詞改掉，上線日延後到 12/15。\n\n2\n00:01:06,000 --> 00:01:10,000\nSPEAKER_02: 預算部分 [inaudible] 需要再確認。\n',
+      mapping: { SPEAKER_00: '王經理 (PM)' },
+      terms: { '拼字錯詞': '微服務架構' }
+    });
+    assert.equal(m2.ok, true);
+    assert.ok(m2.mediaMeta && m2.mediaMeta.sha256);
+    assert.equal(fs.existsSync(path.join(m2.meetingDir, 'media', 'sample.mp3')), true);
+    assert.equal(m2.mapped.unmappedSpeakers.includes('SPEAKER_02'), true);
+    assert.equal(m2.mapped.uncertaintyFlags.length >= 2, true);
+
+    // Add a GitHub permalink and a valid 3-line reference to m2 summary, plus a conflicting launch date
+    fs.appendFileSync(
+      path.join(m2.meetingDir, '02-summary.md'),
+      '\n- **預計上線日**：2026-12-15 (來源：[01-transcript.md](./01-transcript.md#L1-L12))\n- 參考 GitHub Permalink：https://github.com/loviusc/ai-meeting-notes/blob/main/src/index.js#L1-L5\n- 參考三行檔案：[three.txt](../../../three.txt#L1-L3)\n',
+      'utf8'
+    );
+
+    // Generate post-meeting deliverable from template with one missing field (BUDGET_IMPACT)
+    const tplPath = path.join(m2.projectDir, 'templates', 'change-request.md');
+    const delivRes = generateDeliverableFromTemplate({
+      meetingDir: m2.meetingDir,
+      templatePath: tplPath,
+      outputName: 'change-request.md',
+      values: {
+        PROJECT_NAME: 'Project-A',
+        MEETING_DATE: '2026-11-20',
+        REQUESTER: '王經理 (PM)',
+        CHANGE_SUMMARY: '上線日調整至 2026-12-15',
+        LAUNCH_DATE: '2026-12-15'
+      }
+    });
+    assert.equal(delivRes.ok, true);
+    assert.deepEqual(delivRes.missingFields, ['BUDGET_IMPACT']);
+    const delivText = fs.readFileSync(delivRes.outputPath, 'utf8');
+    assert.match(delivText, /⚠️ \[會議未提及 - 需人工補填: BUDGET_IMPACT\]/);
+
+    // Deterministic inspection detects both human-intervention items and cross-meeting conflict (2026-12-15 vs 2026-12-01)
+    const inspectRes = inspectMeetingDirectory(m2.meetingDir);
+    assert.equal(inspectRes.ok, true);
+    assert.equal(inspectRes.humanInterventionItems.length >= 2, true);
+    assert.equal(inspectRes.conflicts.some((c) => c.key === '預計上線日' && c.previousValue.includes('2026-12-01') && c.currentValue.includes('2026-12-15')), true);
+
+    // Recursive verify on 'meetings' must pass (GitHub permalink ignored, #L1-L3 valid, templates/ skipped)
+    const verifyMeetings = runVerify({ cwd: meetWorkspace, target: 'meetings', silent: true });
+    assert.equal(verifyMeetings.ok, true, JSON.stringify(verifyMeetings.issues));
+    assert.equal(verifyMeetings.files.length >= 8, true);
+
+    // Recursive HTML/PDF export on 'meetings' works
+    const htmlMeetings = runPdf({
+      cwd: meetWorkspace,
+      target: 'meetings',
+      flags: { merge: true, html: true, output: 'meetings-report.html' }
+    });
+    assert.equal(htmlMeetings.ok, true);
+    assert.equal(fs.existsSync(path.join(meetWorkspace, 'meetings-report.html')), true);
+
+    // Now test out-of-range #L4 on 3-line file with trailing newline -> MUST FAIL with maxLine === 3!
+    fs.appendFileSync(path.join(m2.meetingDir, '02-summary.md'), '\n- 越界測試：[three.txt](../../../three.txt#L1-L4)\n', 'utf8');
+    const verifyOutOfBounds = runVerify({ cwd: meetWorkspace, target: 'meetings', silent: true });
+    assert.equal(verifyOutOfBounds.ok, false);
+    const brokenLineIssue = verifyOutOfBounds.issues.find((i) => i.type === 'broken_lines');
+    assert.ok(brokenLineIssue);
+    assert.equal(brokenLineIssue.maxLine, 3);
+  } finally {
+    fs.rmSync(meetWorkspace, { recursive: true, force: true });
+  }
+
+  // 11e. Markdown to HTML converter fixes (ordered lists, nested lists, paragraph after list, inline code *b*, XSS link, escaped table pipe \|)
+  const sampleMd = [
+    '1. First ordered',
+    '2. Second ordered',
+    '  - Nested bullet',
+    'Paragraph right after list',
+    '',
+    'Inline code with `*b*` and `[link](https://example.com)` inside.',
+    'Bad link: [click](javascript:alert(1))',
+    '',
+    '| Col A | Col B |',
+    '| :--- | :--- |',
+    '| a \\| b | c |'
+  ].join('\n');
+  const renderedHtml = markdownToHtmlBody(sampleMd);
+  assert.match(renderedHtml, /<ol>\s*<li>First ordered<\/li>\s*<li>Second ordered<\/li>\s*<ul>\s*<li>Nested bullet<\/li>\s*<\/ul>\s*<\/ol>\s*<p>Paragraph right after list<\/p>/);
+  assert.match(renderedHtml, /<code>\*b\*<\/code>/);
+  assert.doesNotMatch(renderedHtml, /<code><em>b<\/em><\/code>/);
+  assert.match(renderedHtml, /<a href="#">click<\/a>/);
+  assert.doesNotMatch(renderedHtml, /href="javascript:/i);
+  assert.match(renderedHtml, /<td>a \| b<\/td>\s*<td>c<\/td>/);
 });

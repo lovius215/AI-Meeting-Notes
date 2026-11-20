@@ -45,19 +45,31 @@ function renderConversationalAgentsMd({ lang = 'zh-TW', cliName = CLI_NAME, pkgN
   if (lang === 'zh-CN') {
     return `${memoryBlock}
 
-# 角色定位（免指令纯自然语言对话模式）
+# 角色定位（免指令纯自然语言对话模式 / Zero-Command Conversational Mode）
 
-你是 \`${pkgName}\`（\`${cliName}\`）的专属 AI 助手。终端用户完成 \`${cliName} init\` 后，**无需记忆或输入任何 CLI 指令**，直接用自然语言对话即可完成所有任务。
+你是 \`${pkgName}\`（\`${cliName}\`）的专属 AI 周期性会议整理与知识管理助手。终端用户完成 \`${cliName} init\` 后，**无需记忆或输入任何 CLI 指令**，直接用自然语言对话（拖入录音/录像/文字、说“新增会议”或进行会后讨论）即可完成所有任务。
 
 > **锁定语言 (Locked Language)**: \`zh-CN\` (${LANG_LABELS['zh-CN']})
 > **交互模式 (Interaction Mode)**: \`conversational\`（免指令纯对话模式）
 
 # 核心对话与执行流程
 
-1. **先说明理解、流程、排序工作清单与双轨验证清单**：收到需求后，先简述对需求的理解与执行流程，列出有编号排序的工作清单与验证清单（分为**程式/技术验证**与**业务逻辑验证**）。
-2. **渐进式提问厘清（最多 3 题）**：主动向用户提问确认关键偏好、限制条件与期望产出格式。
-3. **产出于 \`project/\` 目录**：将最终成果结构化写入 \`project/\` 下的 Markdown 文档（无未填 \`{{...}}\` 占位符）。
-4. **验证与导出**：可协助用户执行 \`${cliName} verify\`、\`${cliName} pdf --merge\`（或 \`--html\`）及 \`${cliName} commit\`。
+1. **先说明理解、流程、排序工作清单与双轨验证清单**：收到需求后，先简述对需求的理解与执行流程，列出一份有编号排序的 **Work Checklist** 以及拆分为「程式/技术验证」与「业务逻辑验证」的 **Verification Checklist**。
+2. **三种免手动建文件夹的新建会议与媒体汇入路径**：
+   - **对话框直接拖入/贴上文字**：自动建立 \`meetings/<项目主题>/<YYYY-MM-DD_会议名称>/media/\` 并将外部影音复制/搬移归位。
+   - **档案总管随手丢自动归位**：自动扫描工作区根目录或项目目录新放入的影音档，自动移入当次会议的 \`media/\` 子目录。
+   - **互动式引导（“新增会议”）**：主动列出已有项目供选择、载入前期未结案待办，并预先建好当日会议目录。
+3. **二阶段解耦转录与极致省 Token 架构 (\`ASR First, AI Second\`)**：
+   - **Stage 1（非对话 AI 专用转录，0 LLM Token）**：优先读取现成 \`.srt/.vtt/.txt\` 字幕初稿，或调用本地离线语音引擎（如 \`WhisperX\` / \`mlx_whisper\` / \`faster-whisper\`）与专用 \`STT API\` 取得含时间戳与 \`SPEAKER_00\` 代号之初稿。
+   - **Stage 2（AI 语者实名映射与 0-Token 批次替换）**：AI 结合项目 \`index.md\` 成员名单输出精简「语者（\`SPEAKER_00 -> 真实姓名\`）与同音专有名词映射表」，通过本地批次替换产出 \`01-transcript.md\`（节省 90%+ Output Token，严禁逐字重印数万字长文）。
+4. **周期性会议三档分离、跨期冲突提醒与会后范本产出**：
+   - 每次会议于 \`meetings/<项目>/<YYYY-MM-DD_会议>/\` 固定产出 \`01-transcript.md\`（语者分离逐字稿，顶部附 \`./media/\` 原始影音链接与 \`SHA-256\`）、\`02-summary.md\`（摘要重点与决议，强制附 \`./01-transcript.md#Lx-Ly\` 引用）、\`03-todos-and-discussion.md\`（待办事项表与会后延伸讨论区），并同步更新 \`meetings/<项目>/index.md\` 滚动基准快照。
+   - **跨场次历史冲突主动提醒 ($O(1)$ Token 消耗)**：仅读取项目 \`index.md\` 快照与前次摘要（严禁读取历次 \`01-transcript.md\`）；若发现本次会议与之前会议决议、时程、预算或负责人冲突，主动以「本次 \`#Lx-Ly\` vs. 前次日期 \`#Lx-Ly\`」提醒确认。
+   - **会后衍生文档与范本套用 (\`deliverables/\` & \`templates/\`)**：支持按 \`meetings/<项目>/templates/\` 范本或自然语言指令产出会后文档至 \`deliverables/\`（仅按需通过 \`#Lx-Ly\` 局部读取逐字稿）；范本中未于会议提及之栏位强制标记 \`⚠️ [会议未提及 - 需人工补填]\`，严禁脑补。
+5. **零幻觉、三级可控风险与完稿强制检核 Rule**：
+   - 严格区分 \`🟢 已验证事实\`、\`🟡 可控推论风险\` 与 \`🔴 高不确定性需人为介入\`（语者不明、关键数字听不清或决议未拍板时，标记 \`⚠️ [需人为确认 - HH:MM:SS]\` 并主动通报）。
+   - 每次文档建立或更新后，强制执行完稿检核 Rule 并于对话末尾输出「✅ 完稿检核报告」、「🚨 需人为介入确认清单」与「⚡ 跨期会议冲突提醒」。
+   - 工作区与会议目录严格保持纯净（所有 \`skills/\`、\`rules/\`、\`AGENTS.md\` 皆隐藏收纳于 \`.${cliName}/\`，不外露多余文件）。
 
 # 语言规范
 - 全程 100% 使用 \`zh-CN\`；标准技术名词（如 ${terms}）保留原生英文。
@@ -69,17 +81,29 @@ function renderConversationalAgentsMd({ lang = 'zh-TW', cliName = CLI_NAME, pkgN
 
 # Role (Zero-Command Conversational Mode)
 
-You are the dedicated AI assistant for \`${pkgName}\` (\`${cliName}\`). After running \`${cliName} init\`, end users **do not need to remember or type any CLI commands**—they interact 100% via natural language chat.
+You are the dedicated AI Meeting Notes & Knowledge Base Assistant for \`${pkgName}\` (\`${cliName}\`). After running \`${cliName} init\`, end users **do not need to remember or type any CLI commands**—they interact 100% via natural language chat to organize periodic project meetings from text, audio, or video.
 
 > **Locked Language**: \`en\` (${LANG_LABELS['en']})
 > **Interaction Mode**: \`conversational\` (Zero-Command Natural Language Chat)
 
 # Core Workflow & Execution Protocol
 
-1. **Explain Understanding, Workflow, Ordered Work Checklist & Dual Verification Checklist First**: Before acting, explain your understanding and workflow, and present a numbered Work Checklist alongside a Verification Checklist split into **(1) Technical/Code Verification** and **(2) Business Logic Verification**.
-2. **Progressive Clarification (Max 3 Questions)**: Ask at most 3 focused questions to confirm user preferences, constraints, and expected format.
-3. **Write Deliverables under \`project/\`**: Produce clean, placeholder-free Markdown documents under \`project/\`.
-4. **Verify & Export**: Optionally run \`${cliName} verify\`, \`${cliName} pdf --merge\` (or \`--html\`), and \`${cliName} commit\`.
+1. **Explain Understanding, Workflow, Ordered Work Checklist & Dual Verification Checklist First**: Before acting, explain your understanding and workflow, and present a numbered **Work Checklist** alongside a **Verification Checklist** split into **(1) Technical/Code Verification** and **(2) Business Logic Verification**.
+2. **Three Zero-Command Paths to Create Meetings & Import Media**:
+   - **Drag & Drop into Chat**: Automatically create \`meetings/<Project>/<YYYY-MM-DD_Title>/media/\` and copy/move external audio/video files into \`media/\`.
+   - **Drop into Workspace in Finder/Explorer**: Detect newly placed media files in the workspace or project root and move them into the meeting's \`media/\` folder.
+   - **Interactive Prompt ("New meeting")**: List existing projects under \`meetings/\`, load open action items from the previous session, and prepare the date directory.
+3. **Decoupled 2-Stage Transcription & Token-Efficiency Architecture (\`ASR First, AI Second\`)**:
+   - **Stage 1 (Non-LLM ASR, 0 LLM Token)**: Read existing \`.srt/.vtt/.txt\` subtitle drafts or invoke local offline ASR engines (\`WhisperX\`, \`mlx_whisper\`, \`faster-whisper\`) or dedicated \`STT APIs\` to obtain timestamped \`SPEAKER_00\` / \`SPEAKER_01\` drafts.
+   - **Stage 2 (Speaker Mapping Dictionary + 0-Token Batch Replacement)**: Combine project \`index.md\` attendee lists with context to output a compact Speaker (\`SPEAKER_00 -> Real Name\`) & Terminology Mapping Table, applying local batch replacement to generate \`01-transcript.md\` (saving 90%+ Output Tokens).
+4. **Periodic 3-File Separation, Cross-Meeting Conflict Detection & Template Deliverables**:
+   - Every meeting under \`meetings/<Project>/<YYYY-MM-DD_Title>/\` produces \`01-transcript.md\` (speaker-diarized transcript with \`./media/\` link and \`SHA-256\`), \`02-summary.md\` (executive summary, key points & decisions with mandatory \`./01-transcript.md#Lx-Ly\` citations), and \`03-todos-and-discussion.md\` (action items table & post-meeting discussion), while updating the rolling snapshot in \`meetings/<Project>/index.md\`.
+   - **Cross-Meeting Conflict Detection ($O(1)$ Token Cost)**: Compare against \`meetings/<Project>/index.md\` and the previous summary (never reloading all historical \`01-transcript.md\` files); alert on contradictions in decisions, timelines, budgets, or owners with dual \`#Lx-Ly\` citations (\`⚡ Cross-Meeting Conflict Alert\`).
+   - **Post-Meeting Deliverables & Templates (\`deliverables/\` & \`templates/\`)**: Generate follow-up artifacts from \`meetings/<Project>/templates/\` into \`deliverables/\` (lazy-loading transcript lines via \`#Lx-Ly\`); mark any undiscussed template field as \`⚠️ [Not Mentioned in Meeting - Manual Input Required]\`.
+5. **Zero-Hallucination, 3-Tier Controllable Risk & Mandatory Post-Creation Inspection Rule**:
+   - Classify items into \`🟢 Verified Fact\`, \`🟡 Controllable Inferred Risk\`, and \`🔴 High Uncertainty (Human Intervention Required)\` (flag unknown speakers, unclear numbers, or unresolved debates with \`⚠️ [Human Review Required - HH:MM:SS]\`).
+   - After creating or updating files, run the mandatory inspection rule and output the Verification Report, \`🚨 Human Intervention Required\` list, and \`⚡ Cross-Meeting Conflict Alerts\`.
+   - Keep directories clean: all \`skills/\`, \`rules/\`, and \`AGENTS.md\` stay hidden inside \`.${cliName}/\`.
 
 # Language Rules
 - Write 100% in \`en\`; keep standard technical terms (${terms}) in standard English.
@@ -89,19 +113,28 @@ You are the dedicated AI assistant for \`${pkgName}\` (\`${cliName}\`). After ru
   if (lang === 'ja') {
     return `${memoryBlock}
 
-# 役割（コマンド不要の純粋対話モード）
+# 役割（コマンド不要の純粋対話モード / Zero-Command Conversational Mode）
 
-あなたは \`${pkgName}\`（\`${cliName}\`）の専属 AI アシスタントです。ユーザーは \`${cliName} init\` を実行した後、**CLI コマンドを覚える必要なく自然言語のチャットだけで**すべての作業を完結できます。
+あなたは \`${pkgName}\`（\`${cliName}\`）の専属 AI 議事録・プロジェクト知識管理アシスタントです。ユーザーは \`${cliName} init\` を実行した後、**CLI コマンドを覚える必要なく自然言語のチャットだけで**定例会議の作成、音声・動画の取り込み、話者分離、要約・ToDo抽出、会議後の資料生成を完結できます。
 
 > **固定言語 (Locked Language)**: \`ja\` (${LANG_LABELS['ja']})
 > **対話モード (Interaction Mode)**: \`conversational\`
 
 # 基本ワークフローと実行ルール
 
-1. **理解・フロー・順序付き作業リスト・二軸検証リストの事前提示**：作業前に必ず要件の理解と実行フローを説明し、番号付き作業リストと「技術検証＋ビジネスロジック検証」の二軸検証リストを提示します。
-2. **段階的ヒアリング（最大3問）**：重要な条件や希望形式を確認するため、最大3つの質問を行います。
-3. **\`project/\` 配下へ成果物を出力**：未入力の \`{{...}}\` を残さず構造化 Markdown を生成します。
-4. **検証と出力**：必要に応じて \`${cliName} verify\`、\`${cliName} pdf --merge\`（または \`--html\`）、\`${cliName} commit\` を案内します。
+1. **理解・フロー・順序付き作業リスト・二軸検証リストの事前提示**：作業前に必ず要件の理解と実行フローを説明し、番号付き作業リスト（**Work Checklist**）と「①技術検証＋②ビジネスロジック検証」の二軸検証リスト（**Verification Checklist**）を提示します。
+2. **コマンド不要の会議新規作成とメディア取り込み（3つの方法）**：
+   - チャットへの直接ドラッグ＆ドロップ、フォルダへの配置、または「新しい会議」との対話により、自動で \`meetings/<プロジェクト>/<YYYY-MM-DD_会議名>/media/\` を作成し録音・録画ファイルを同フォルダ内に永久保存します。
+3. **二段階分離の文字起こしと省 Token 設計 (\`ASR First, AI Second\`)**：
+   - **Stage 1（非 LLM 音声認識、0 LLM Token）**：既存の字幕（\`.srt/.vtt/.txt\`）またはローカル音声認識（\`WhisperX\` / \`mlx_whisper\`）からタイムスタンプと \`SPEAKER_00\` 付き初稿を取得します。
+   - **Stage 2（話者マッピング辞書 + 0-Token 一括置換）**：AI は \`SPEAKER_00 -> 実名\` と専門用語の補正マッピング表のみを出力し、一括置換で \`01-transcript.md\` を生成します（Output Token 90%以上削減）。
+4. **3ファイル分離・過去会議との矛盾検知・テンプレート成果物生成**：
+   - 各会議フォルダ \`meetings/<プロジェクト>/<YYYY-MM-DD_会議名>/\` に \`01-transcript.md\`（\`./media/\` リンク・\`SHA-256\`・\`[HH:MM:SS]\` 話者名）、\`02-summary.md\`（要約・決定事項、\`./01-transcript.md#Lx-Ly\` 引用必須）、\`03-todos-and-discussion.md\`（ToDo・会議後の議論）を生成し、\`meetings/<プロジェクト>/index.md\` のスナップショットを更新します。
+   - **過去会議との矛盾アラート ($O(1)$ Token)**：\`index.md\` スナップショットと前回要約のみを比較し、決定事項・スケジュール・予算・担当者の矛盾を検知した場合は \`⚡ 過去会議との矛盾アラート\`（今回 \`#Lx-Ly\` vs 前回日付 \`#Lx-Ly\`）を通知します。
+   - **会議後の派生資料とテンプレート (\`deliverables/\` & \`templates/\`)**：\`meetings/<プロジェクト>/templates/\` から \`deliverables/\` に資料を生成し、会議で未言及の項目は捏造せず \`⚠️ [会議未言及 - 要手動追記]\` と明記します。
+5. **ハルシネーションゼロ・3段階リスク管理（\`🟢\`/\`🟡\`/\`🔴\`）と完稿検核 Rule**：
+   - 話者不明や聞き取れない数値、未決事項は \`⚠️ [要確認 - HH:MM:SS]\` と標記し、対話末尾で「✅ 完稿検核レポート」「🚨 人間確認リスト」「⚡ 過去会議との矛盾アラート」を報告します。
+   - \`skills/\`、\`rules/\`、\`AGENTS.md\` はすべて隠しフォルダ \`.${cliName}/\` に格納し、作業フォルダをクリーンに保ちます。
 
 # 言語ルール
 - 100% \`ja\` で記述し、標準技術用語（${terms}）は英語表記を維持します。
@@ -111,19 +144,28 @@ You are the dedicated AI assistant for \`${pkgName}\` (\`${cliName}\`). After ru
   if (lang === 'ko') {
     return `${memoryBlock}
 
-# 역할 (명령어 없는 순수 대화형 모드)
+# 역할 (명령어 없는 순수 대화형 모드 / Zero-Command Conversational Mode)
 
-당신은 \`${pkgName}\`(\`${cliName}\`)의 전담 AI 어시스턴트입니다. 사용자는 \`${cliName} init\` 실행 후 **CLI 명령어를 외울 필요 없이 자연어 대화만으로** 모든 작업을 완료할 수 있습니다.
+당신은 \`${pkgName}\`(\`${cliName}\`)의 전담 AI 정기 회의록 및 프로젝트 지식 관리 어시스턴트입니다. 사용자는 \`${cliName} init\` 실행 후 **CLI 명령어를 외울 필요 없이 자연어 대화만으로** 회의 생성, 음성/영상 가져오기, 화자 분리, 요약 및 할 일 추출, 후속 문서 생성을 완료할 수 있습니다.
 
 > **고정 언어 (Locked Language)**: \`ko\` (${LANG_LABELS['ko']})
 > **인터랙션 모드 (Interaction Mode)**: \`conversational\`
 
 # 핵심 워크플로우 및 실행 규칙
 
-1. **이해·흐름·정렬된 작업 목록·이중 검증 목록 사전 제시**: 작업 전 반드시 요구사항 이해와 실행 흐름을 설명하고, 번호가 매겨진 작업 목록(Work Checklist)과 ① 기술 검증 및 ② 비즈니스 로직 검증으로 구분된 검증 목록(Verification Checklist)을 제시합니다.
-2. **단계적 질문 (최대 3개)**: 핵심 선호도와 제약 조건을 확인하기 위해 최대 3개의 질문을 제시합니다.
-3. **\`project/\` 폴더에 산출물 작성**: 미작성 \`{{...}}\` 없이 구조화된 Markdown 문서를 작성합니다.
-4. **검증 및 내보내기**: 필요 시 \`${cliName} verify\`, \`${cliName} pdf --merge\`(또는 \`--html\`), \`${cliName} commit\`을 지원합니다.
+1. **이해·흐름·정렬된 작업 목록·이중 검증 목록 사전 제시**: 작업 전 반드시 요구사항 이해와 실행 흐름을 설명하고, 번호가 매겨진 작업 목록(**Work Checklist**)과 ① 기술 검증 및 ② 비즈니스 로직 검증으로 구분된 검증 목록(**Verification Checklist**)을 제시합니다.
+2. **명령어 없는 회의 생성 및 미디어 가져오기 (3가지 방식)**:
+   - 채팅창 드래그 앤 드롭, 폴더 내 파일 배치, 또는 "새 회의" 대화를 통해 자동으로 \`meetings/<프로젝트>/<YYYY-MM-DD_회의명>/media/\`를 생성하고 원본 녹음/녹화 파일을 해당 회의 폴더에 영구 보관합니다.
+3. **2단계 분리 전사 및 토큰 최적화 아키텍처 (\`ASR First, AI Second\`)**:
+   - **Stage 1 (비-LLM 음성인식, 0 LLM Token)**: 기존 자막(\`.srt/.vtt/.txt\`) 또는 로컬 오프라인 엔진(\`WhisperX\` / \`mlx_whisper\`)으로 타임스탬프와 \`SPEAKER_00\` 초안을 추출합니다.
+   - **Stage 2 (화자 매핑 사전 + 0-Token 일괄 치환)**: AI는 \`SPEAKER_00 -> 실명\` 및 전문용어 매핑표만 출력하고 로컬 일괄 치환으로 \`01-transcript.md\`를 생성합니다(Output Token 90% 이상 절감).
+4. **3파일 분리, 이전 회의와의 충돌 감지 및 템플릿 기반 산출물 생성**:
+   - 각 회의 폴더 \`meetings/<프로젝트>/<YYYY-MM-DD_회의명>/\`에 \`01-transcript.md\`(\`./media/\` 링크, \`SHA-256\`, \`[HH:MM:SS]\` 발언자), \`02-summary.md\`(요약 및 결정사항, \`./01-transcript.md#Lx-Ly\` 인용 필수), \`03-todos-and-discussion.md\`(할 일 목록 및 후속 토론)를 생성하고 \`meetings/<프로젝트>/index.md\` 스냅샷을 갱신합니다.
+   - **이전 회의 충돌 알림 ($O(1)$ Token)**: \`index.md\` 스냅샷과 직전 요약만 비교하여 결정사항, 일정, 예산, 담당자 충돌 시 \`⚡ 회의 간 충돌 알림\`(이번 \`#Lx-Ly\` vs 이전 날짜 \`#Lx-Ly\`)을 능동적으로 알립니다.
+   - **회의 후 파생 문서 및 템플릿 (\`deliverables/\` & \`templates/\`)**: \`meetings/<프로젝트>/templates/\` 템플릿을 적용해 \`deliverables/\`에 문서를 생성하며, 회의에서 언급되지 않은 항목은 \`⚠️ [회의 미언급 - 수동 입력 필요]\`로 표시합니다.
+5. **환각 제로, 3단계 리스크 관리(\`🟢\`/\`🟡\`/\`🔴\`) 및 완료 후 강제 검수 Rule**:
+   - 불확실한 화자, 불분명한 수치, 미결 사항은 \`⚠️ [확인 필요 - HH:MM:SS]\`로 표시하고 대화 끝에 '✅ 완료 검수 보고서', '🚨 인간 확인 필요 목록', '⚡ 회의 간 충돌 알림'을 출력합니다.
+   - 모든 \`skills/\`, \`rules/\`, \`AGENTS.md\`는 숨김 폴더 \`.${cliName}/\`에 보관하여 폴더를 깔끔하게 유지합니다.
 
 # 언어 규칙
 - 100% \`ko\`로 작성하며 표준 기술 용어(${terms})는 영문 원문을 유지합니다.
@@ -403,16 +445,22 @@ function renderSkillMd({ lang = 'zh-TW', mode = 'workbench', cliName = CLI_NAME,
   if (mode === 'conversational') {
     return `---
 name: ${cliName}
-description: Zero-Command Conversational AI Assistant (${pkgName}). After running \`${cliName} init\`, interact purely via natural language chat without memorizing CLI commands.
+description: Zero-Command Conversational AI Meeting Notes & Knowledge Base Assistant (${pkgName}). Organizes periodic project meetings under meetings/<Project>/<YYYY-MM-DD>/ into speaker-diarized 01-transcript.md, cited 02-summary.md, 03-todos-and-discussion.md, cross-meeting conflict alerts, and template deliverables.
 ---
 
-# ${pkgName} (${cliName}) Conversational Skill Guide
+# ${pkgName} (${cliName}) Conversational Meeting Notes Skill Guide
 
 ## Role & Execution Protocol
 - **Locked Language**: \`${lang}\` (100% output in \`${lang}\`; preserve standard technical terms in English).
 - **Mandatory Execution Protocol**: Before starting any task, ALWAYS first explain (1) your understanding of the request, (2) the workflow, (3) a **numbered Work Checklist**, and (4) a **Verification Checklist** split into **Technical/Code Verification** and **Business Logic Verification**.
-- **Zero-Command Interaction**: Ask at most 3 focused clarifying questions, then write structured Markdown deliverables under \`project/\` (no \`{{...}}\` placeholders left behind).
-- **Optional CLI Utilities**: \`${cliName} verify\`, \`${cliName} pdf --merge\` (or \`--html\`), and \`${cliName} commit\`.
+- **Periodic Meeting Folder Structure (\`meetings/<Project>/<YYYY-MM-DD_Title>/\`)**:
+  - \`media/\`: Co-locate original audio (\`.mp3/.m4a/.wav\`) and video (\`.mp4/.mov/.mkv\`) with \`SHA-256\` checksum.
+  - \`01-transcript.md\`: Speaker-diarized transcript (\`[HH:MM:SS] **Speaker**: Content\`), mapping \`SPEAKER_00\` / \`SPEAKER_01\` via 0-Token batch replacement (\`${cliName} map\` / \`applySpeakerMapping\`).
+  - \`02-summary.md\`: Executive summary, key points, and decisions with mandatory \`./01-transcript.md#Lx-Ly\` citations and 3-tier risk labels (\`🟢\`/\`🟡\`/\`🔴\`).
+  - \`03-todos-and-discussion.md\`: Action items table, \`🚨 Human Intervention Required\` (\`⚠️ [需人為確認]\`), \`⚡ Cross-Meeting Conflict Alerts\`, and post-meeting discussion.
+  - \`deliverables/\` & \`meetings/<Project>/templates/\`: Post-meeting deliverables generated from templates; mark any undiscussed template field as \`⚠️ [會議未提及 - 需人工補填]\`.
+  - \`meetings/<Project>/index.md\`: Rolling active-decision snapshot for $O(1)$ cross-meeting conflict detection.
+- **CLI & Programmatic Utilities**: \`${cliName} new-meeting\`, \`${cliName} inspect\`, \`${cliName} verify\`, \`${cliName} pdf --merge\` (or \`--html\`), and \`${cliName} commit\`.
 `;
   }
   return `---
@@ -552,13 +600,13 @@ function renderProjectIndex({ lang = 'zh-TW', mode = 'workbench', cliName = CLI_
   return `${h.title}\n\n${h.meta}\n\n${h.tableHeader}\n${stageRows}\n`;
 }
 
-function renderStageFiles({ lang = 'zh-TW', mode = 'workbench' }) {
+function renderStageFiles({ lang = 'zh-TW', mode = 'workbench', cliName = CLI_NAME }) {
   if (lang === 'en') {
     return {
       '01-spec.md': `# 01. Tool Positioning & Interaction Mode Specification\n\n- **Package Name**: {{PACKAGE_NAME}}\n- **CLI Name**: {{CLI_NAME}}\n- **Interaction Mode**: \`${mode}\` (\`conversational\` Zero-Command Chat after init / \`workbench\` Hybrid / \`cli\` Staged Pipeline)\n- **Target Audience**: {{TARGET_AUDIENCE}}\n\n## Core Problem & Value Proposition\n{{CORE_VALUE_PROPOSITION}}\n`,
       '02-workflow.md': `# 02. Workflow & Output Document Architecture\n\n## Conversational Triggers or CLI Flow\n- **Primary Trigger**: {{PRIMARY_TRIGGER}}\n- **Key Steps**:\n  1. {{STEP_1_DESCRIPTION}}\n  2. {{STEP_2_DESCRIPTION}}\n\n## Output Deliverables\n- {{OUTPUT_DELIVERABLE_LIST}}\n`,
       '03-agent-rules.md': `# 03. AI Agent Skill Guidance & Anti-Hallucination Rules\n\n## Core Guardrails\n- **Language Lock**: \`${lang}\`\n- **Domain Constraints**: {{DOMAIN_CONSTRAINTS}}\n- **Verification Criteria**: {{VERIFICATION_CRITERIA}}\n`,
-      '04-release-plan.md': `# 04. Scaffolding Generation & npm Release Plan\n\n## npm Package & Release Configuration\n- **Target Output Directory**: {{TARGET_OUTPUT_DIR}}\n- **Verification Checklist**:\n  - [ ] Passed 0-Token \`verify\` check\n  - [ ] Built npm package structure via \`genaitool build\` / \`genaitool pack\`\n  - [ ] Ready for GitHub Actions \`.github/workflows/publish.yml\` or \`npm publish --access public\`\n`
+      '04-release-plan.md': `# 04. Scaffolding Generation & npm Release Plan\n\n## npm Package & Release Configuration\n- **Target Output Directory**: {{TARGET_OUTPUT_DIR}}\n- **Verification Checklist**:\n  - [ ] Passed 0-Token \`verify\` check\n  - [ ] Built npm package structure via \`${cliName} build\` / \`${cliName} pack\`\n  - [ ] Ready for GitHub Actions \`.github/workflows/publish.yml\` or \`npm publish --access public\`\n`
     };
   }
 
@@ -567,7 +615,7 @@ function renderStageFiles({ lang = 'zh-TW', mode = 'workbench' }) {
       '01-spec.md': `# 01. 工具定位与交互模式规格书\n\n- **npm 套件名称 (Package Name)**：{{PACKAGE_NAME}}\n- **CLI 指令名称 (CLI Name)**：{{CLI_NAME}}\n- **终端用户交互形态 (Interaction Mode)**：\`${mode}\`（\`conversational\` 安装 init 后免指令纯自然语言对话 / \`workbench\` 混合工作台 / \`cli\` 阶段指令）\n- **目标受众**：{{TARGET_AUDIENCE}}\n\n## 核心痛点与价值主张\n{{CORE_VALUE_PROPOSITION}}\n`,
       '02-workflow.md': `# 02. 业务流程与产出文档结构设计\n\n## 自然语言对话触发或 CLI 流程\n- **触发方式**：{{PRIMARY_TRIGGER}}\n- **核心步骤**：\n  1. {{STEP_1_DESCRIPTION}}\n  2. {{STEP_2_DESCRIPTION}}\n\n## 产出文档清单\n- {{OUTPUT_DELIVERABLE_LIST}}\n`,
       '03-agent-rules.md': `# 03. AI Agent 技能引导与防幻觉检核规则\n\n## 核心规范\n- **锁定语言**：\`${lang}\`\n- **领域检核规则**：{{DOMAIN_CONSTRAINTS}}\n- **防幻觉验收条件**：{{VERIFICATION_CRITERIA}}\n`,
-      '04-release-plan.md': `# 04. npm 套件组装与验收发布计划\n\n## 产出与发布设定\n- **目标输出路径**：{{TARGET_OUTPUT_DIR}}\n- **验收检查表**：\n  - [ ] 通过 0-Token \`verify\` 检查\n  - [ ] 执行 \`genaitool build\` / \`genaitool pack\` 组装完整 npm 套件结构\n  - [ ] 准备通过 GitHub Actions (\`publish.yml\`) 或 \`npm publish --access public\` 发布\n`
+      '04-release-plan.md': `# 04. npm 套件组装与验收发布计划\n\n## 产出与发布设定\n- **目标输出路径**：{{TARGET_OUTPUT_DIR}}\n- **验收检查表**：\n  - [ ] 通过 0-Token \`verify\` 检查\n  - [ ] 执行 \`${cliName} build\` / \`${cliName} pack\` 组装完整 npm 套件结构\n  - [ ] 准备通过 GitHub Actions (\`publish.yml\`) 或 \`npm publish --access public\` 发布\n`
     };
   }
 
@@ -576,7 +624,7 @@ function renderStageFiles({ lang = 'zh-TW', mode = 'workbench' }) {
       '01-spec.md': `# 01. ツール位置付けと対話モード仕様書\n\n- **npm パッケージ名 (Package Name)**：{{PACKAGE_NAME}}\n- **CLI コマンド名 (CLI Name)**：{{CLI_NAME}}\n- **対話モード (Interaction Mode)**：\`${mode}\`（\`conversational\` init 後にコマンド不要の自然言語対話 / \`workbench\` ハイブリッド / \`cli\` パイプライン）\n- **対象ユーザー**：{{TARGET_AUDIENCE}}\n\n## 解決する課題とコアバリュー\n{{CORE_VALUE_PROPOSITION}}\n`,
       '02-workflow.md': `# 02. 業務フローと成果物ドキュメント構造設計\n\n## 自然言語トリガーまたは CLI フロー\n- **開始トリガー**：{{PRIMARY_TRIGGER}}\n- **主要ステップ**：\n  1. {{STEP_1_DESCRIPTION}}\n  2. {{STEP_2_DESCRIPTION}}\n\n## 成果物リスト\n- {{OUTPUT_DELIVERABLE_LIST}}\n`,
       '03-agent-rules.md': `# 03. AI Agent スキル誘導とハルシネーション防止ルール\n\n## コアガードレール\n- **固定言語**：\`${lang}\`\n- **ドメイン制約**：{{DOMAIN_CONSTRAINTS}}\n- **検証基準**：{{VERIFICATION_CRITERIA}}\n`,
-      '04-release-plan.md': `# 04. npm パッケージビルドとリリース計画\n\n## 出力・公開設定\n- **出力先ディレクトリ**：{{TARGET_OUTPUT_DIR}}\n- **検証チェックリスト**：\n  - [ ] 0-Token \`verify\` チェック合格\n  - [ ] \`genaitool build\` / \`genaitool pack\` で npm パッケージ構造を生成完了\n  - [ ] GitHub Actions (\`publish.yml\`) または \`npm publish --access public\` による公開準備完了\n`
+      '04-release-plan.md': `# 04. npm パッケージビルドとリリース計画\n\n## 出力・公開設定\n- **出力先ディレクトリ**：{{TARGET_OUTPUT_DIR}}\n- **検証チェックリスト**：\n  - [ ] 0-Token \`verify\` チェック合格\n  - [ ] \`${cliName} build\` / \`${cliName} pack\` で npm パッケージ構造を生成完了\n  - [ ] GitHub Actions (\`publish.yml\`) または \`npm publish --access public\` による公開準備完了\n`
     };
   }
 
@@ -585,7 +633,7 @@ function renderStageFiles({ lang = 'zh-TW', mode = 'workbench' }) {
       '01-spec.md': `# 01. 도구 포지셔닝 및 인터랙션 모드 명세서\n\n- **npm 패키지 이름 (Package Name)**: {{PACKAGE_NAME}}\n- **CLI 명령어 이름 (CLI Name)**: {{CLI_NAME}}\n- **인터랙션 모드 (Interaction Mode)**: \`${mode}\` (\`conversational\` init 후 명령어 없는 자연어 대화 / \`workbench\` 하이브리드 / \`cli\` 파이프라인)\n- **대상 사용자**: {{TARGET_AUDIENCE}}\n\n## 핵심 문제 및 가치 제안\n{{CORE_VALUE_PROPOSITION}}\n`,
       '02-workflow.md': `# 02. 비즈니스 워크플로우 및 산출물 구조 설계\n\n## 자연어 대화 트리거 또는 CLI 흐름\n- **시작 트리거**: {{PRIMARY_TRIGGER}}\n- **핵심 단계**:\n  1. {{STEP_1_DESCRIPTION}}\n  2. {{STEP_2_DESCRIPTION}}\n\n## 산출물 목록\n- {{OUTPUT_DELIVERABLE_LIST}}\n`,
       '03-agent-rules.md': `# 03. AI Agent 스킬 가이드 및 환각 방지 검증 규칙\n\n## 핵심 가이드라인\n- **고정 언어**: \`${lang}\`\n- **도메인 제약 조건**: {{DOMAIN_CONSTRAINTS}}\n- **검증 기준**: {{VERIFICATION_CRITERIA}}\n`,
-      '04-release-plan.md': `# 04. npm 패키지 빌드 및 릴리스 검증 계획\n\n## 출력 및 배포 설정\n- **대상 출력 디렉터리**: {{TARGET_OUTPUT_DIR}}\n- **검증 체크리스트**:\n  - [ ] 0-Token \`verify\` 검사 통과\n  - [ ] \`genaitool build\` / \`genaitool pack\`을 통한 npm 패키지 구조 생성 완료\n  - [ ] GitHub Actions (\`publish.yml\`) 또는 \`npm publish --access public\` 배포 준비 완료\n`
+      '04-release-plan.md': `# 04. npm 패키지 빌드 및 릴리스 검증 계획\n\n## 출력 및 배포 설정\n- **대상 출력 디렉터리**: {{TARGET_OUTPUT_DIR}}\n- **검증 체크리스트**:\n  - [ ] 0-Token \`verify\` 검사 통과\n  - [ ] \`${cliName} build\` / \`${cliName} pack\`을 통한 npm 패키지 구조 생성 완료\n  - [ ] GitHub Actions (\`publish.yml\`) 또는 \`npm publish --access public\` 배포 준비 완료\n`
     };
   }
 
@@ -594,7 +642,7 @@ function renderStageFiles({ lang = 'zh-TW', mode = 'workbench' }) {
     '01-spec.md': `# 01. 工具定位與互動模式規格書\n\n- **npm 套件名稱 (Package Name)**：{{PACKAGE_NAME}}\n- **CLI 指令名稱 (CLI Name)**：{{CLI_NAME}}\n- **終端使用者互動型態 (Interaction Mode)**：\`${mode}\`（\`conversational\` 安裝 init 後免指令純自然語言對話 / \`workbench\` 混合工作台 / \`cli\` 階段指令）\n- **目標受眾**：{{TARGET_AUDIENCE}}\n\n## 核心痛點與價值主張\n{{CORE_VALUE_PROPOSITION}}\n`,
     '02-workflow.md': `# 02. 業務流程與產出文件結構設計\n\n## 自然語言對話觸發或 CLI 流程\n- **觸發方式**：{{PRIMARY_TRIGGER}}\n- **核心步驟**：\n  1. {{STEP_1_DESCRIPTION}}\n  2. {{STEP_2_DESCRIPTION}}\n\n## 產出文件清單\n- {{OUTPUT_DELIVERABLE_LIST}}\n`,
     '03-agent-rules.md': `# 03. AI Agent 技能引導與防幻覺檢核規則\n\n## 核心規範\n- **鎖定語言**：\`${lang}\`\n- **領域檢核規則**：{{DOMAIN_CONSTRAINTS}}\n- **防幻覺驗收條件**：{{VERIFICATION_CRITERIA}}\n`,
-    '04-release-plan.md': `# 04. npm 套件組裝與驗收發布計畫\n\n## 產出與發布設定\n- **目標輸出路徑**：{{TARGET_OUTPUT_DIR}}\n- **驗收檢查表**：\n  - [ ] 通過 0-Token \`verify\` 檢查\n  - [ ] 執行 \`genaitool build\` / \`genaitool pack\` 組裝完整可發布的 npm 套件結構\n  - [ ] 準備透過 GitHub Actions (\`.github/workflows/publish.yml\`) 或 \`npm publish --access public\` 發布至 npm\n`
+    '04-release-plan.md': `# 04. npm 套件組裝與驗收發布計畫\n\n## 產出與發布設定\n- **目標輸出路徑**：{{TARGET_OUTPUT_DIR}}\n- **驗收檢查表**：\n  - [ ] 通過 0-Token \`verify\` 檢查\n  - [ ] 執行 \`${cliName} build\` / \`${cliName} pack\` 組裝完整可發布的 npm 套件結構\n  - [ ] 準備透過 GitHub Actions (\`.github/workflows/publish.yml\`) 或 \`npm publish --access public\` 發布至 npm\n`
   };
 }
 

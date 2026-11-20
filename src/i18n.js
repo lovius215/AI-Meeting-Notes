@@ -19,12 +19,19 @@ const DICT = {
   • HTML 報告匯出：${features.html ? '✅ 已啟用' : '⏸️ 未啟用（--no-html）'}（${CLI_NAME} pdf --html）
   • npm 套件發布結構：${features.npm ? `✅ 已啟用（skills/rules ${features.hideSkillsRules ? '隱藏於 .' + CLI_NAME + '/ [OpenSpec 作法]' : '顯示於根目錄'}）` : '⏸️ 未啟用（僅本機工作區，--no-npm）'}
 
-🤖 建議開發流程（請在 AI 對話視窗操作）：
+🤖 ${mode === 'conversational'
+      ? `建議會議整理流程（免指令純自然語言對話 / meetings/ 目錄已就緒）：
+  1. 直接在 AI 對話視窗拖入錄音 (.mp3/.m4a)、錄影 (.mp4) 或文字（或執行 ${CLI_NAME} new-meeting <專案> <主題>）
+  2. AI 自動建立 meetings/<專案>/<YYYY-MM-DD_主題>/ 並產出 01-transcript.md、02-summary.md、03-todos-and-discussion.md
+  3. 自動執行完稿檢核 Rule（回報 🟢/🟡/🔴 風險、🚨 需人為介入確認清單與 ⚡ 跨期會議衝突提醒）
+  4. 會後可隨時針對會議延伸討論，或套用 meetings/<專案>/templates/ 範本產出衍生文件至 deliverables/
+  5. 驗證與匯出：${CLI_NAME} verify meetings / ${CLI_NAME} inspect <會議目錄> / ${CLI_NAME} pdf meetings --merge`
+      : `建議開發流程（請在 AI 對話視窗操作）：
   1. 先打開 project/01-spec.md、02-workflow.md（或 project/index.md）把您的需求與流程填入
   2. 輸入 tool:propose (gtp) -> 請 AI 審查檢查需求並給予補充想法
   3. 輸入 tool:analyze  (gta) -> 起草完整規格與規則
   4. ${features.npm ? '輸入 tool:scaffold (gts) -> 原地組裝可發布的 npm 套件，並執行 npm test 測試整個 AI 工具流程！' : '完成規格後即可直接測試整個 AI 工具的對話與產出流程！'}
-  5. 驗證與歸檔：${CLI_NAME} verify / ${CLI_NAME} pdf --merge / ${CLI_NAME} commit`,
+  5. 驗證與歸檔：${CLI_NAME} verify / ${CLI_NAME} pdf --merge / ${CLI_NAME} commit`}`,
     gitInitDone: '✅ 已初始化本機 Git 儲存庫 (git init)',
     gitAlreadyExists: 'ℹ️ 已偵測到現有 Git 儲存庫',
     verifyStart: '🔍 開始執行 0-Token 防幻覺與完整性檢查 (verify)...',
@@ -131,12 +138,19 @@ const DICT = {
   • HTML Report Export: ${features.html ? '✅ Enabled' : '⏸️ Disabled (--no-html)'} (${CLI_NAME} pdf --html)
   • npm Package Publishing: ${features.npm ? `✅ Enabled (skills/rules ${features.hideSkillsRules ? 'hidden in .' + CLI_NAME + '/ [OpenSpec style]' : 'visible at root'})` : '⏸️ Disabled (local workspace only, --no-npm)'}
 
-🤖 Recommended Workflow (in your AI Chat):
+🤖 ${mode === 'conversational'
+      ? `Recommended Meeting Workflow (Zero-Command Conversational Mode / meetings/ ready):
+  1. Drag audio (.mp3/.m4a), video (.mp4), or text notes into AI chat (or run ${CLI_NAME} new-meeting <Project> <Title>)
+  2. AI creates meetings/<Project>/<YYYY-MM-DD_Title>/ with 01-transcript.md, 02-summary.md & 03-todos-and-discussion.md
+  3. Mandatory Post-Creation Inspection reports 🟢/🟡/🔴 risk tiers, 🚨 Human-in-the-Loop items & ⚡ Cross-Meeting Conflicts
+  4. Generate post-meeting artifacts from meetings/<Project>/templates/ into deliverables/
+  5. Verify & export: ${CLI_NAME} verify meetings / ${CLI_NAME} inspect <dir> / ${CLI_NAME} pdf meetings --merge`
+      : `Recommended Workflow (in your AI Chat):
   1. Open project/01-spec.md & 02-workflow.md (or project/index.md) and fill in your requirements & flow
   2. Type tool:propose (gtp) -> Let AI review, inspect gaps, and offer ideas/suggestions
   3. Type tool:analyze (gta) -> Draft full specifications & rules
   4. ${features.npm ? 'Type tool:scaffold (gts) -> Assemble the publishable npm package in-place and run npm test to test the entire AI tool!' : 'Test the entire AI tool conversation & output workflow directly!'}
-  5. Verify & archive: ${CLI_NAME} verify / ${CLI_NAME} pdf --merge / ${CLI_NAME} commit`,
+  5. Verify & archive: ${CLI_NAME} verify / ${CLI_NAME} pdf --merge / ${CLI_NAME} commit`}`,
     gitInitDone: '✅ Initialized local Git repository (git init)',
     gitAlreadyExists: 'ℹ️ Existing Git repository detected',
     verifyStart: '🔍 Running 0-Token Anti-Hallucination & Integrity Check (verify)...',

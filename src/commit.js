@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { CLI_NAME } = require('./config');
 const { readConfig, runGit, isSensitiveFile } = require('./utils');
 const { t } = require('./i18n');
 const { runVerify, verifyFile } = require('./verify');
@@ -118,8 +119,8 @@ function runCommit({ cwd = process.cwd(), target = null, flags = {} } = {}) {
   // Ensure git user.name and user.email exist (fallback for clean local/CI environments)
   const userName = runGit(['config', 'user.name'], cwd);
   if (!userName.stdout) {
-    runGit(['config', 'user.name', 'genaitool-bot'], cwd);
-    runGit(['config', 'user.email', 'bot@genaitool.local'], cwd);
+    runGit(['config', 'user.name', `${CLI_NAME}-bot`], cwd);
+    runGit(['config', 'user.email', `bot@${CLI_NAME}.local`], cwd);
   }
 
   // 5. Stage files while excluding sensitive config files
@@ -195,16 +196,30 @@ function runCommit({ cwd = process.cwd(), target = null, flags = {} } = {}) {
       if (pullRes.stderr) {
         console.error(pullRes.stderr);
       }
+      return {
+        ok: false,
+        reason: 'remote_sync_failed',
+        error: pullRes.stderr || 'git pull failed',
+        commitHash: shortHash
+      };
+    }
+
+    const pushArgs = missingRemoteBranch
+      ? ['push', '-u', remoteName, branchName]
+      : ['push', remoteName, branchName];
+    const pushRes = runGit(pushArgs, cwd);
+    if (pushRes.ok) {
+      console.log(t(lang, 'commitPushSuccess'));
     } else {
-      const pushArgs = missingRemoteBranch
-        ? ['push', '-u', remoteName, branchName]
-        : ['push', remoteName, branchName];
-      const pushRes = runGit(pushArgs, cwd);
-      if (pushRes.ok) {
-        console.log(t(lang, 'commitPushSuccess'));
-      } else if (pushRes.stderr) {
+      if (pushRes.stderr) {
         console.error(pushRes.stderr);
       }
+      return {
+        ok: false,
+        reason: 'remote_sync_failed',
+        error: pushRes.stderr || 'git push failed',
+        commitHash: shortHash
+      };
     }
   }
 
