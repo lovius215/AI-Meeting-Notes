@@ -95,15 +95,30 @@ function runInit({ cwd = process.cwd(), flags = {} } = {}) {
     fs.copyFileSync(gitignoreTemplatePath, targetGitignore);
   }
 
-  // 2. Write .<cli>/AGENTS.md (protected against accidental overwrite on re-run unless --force or --lang/--mode changed)
+  // 2. Write .<cli>/AGENTS.md (protected against accidental overwrite on re-run unless --force or --lang/--mode changed; preserves user-appended custom sections)
   const hiddenRoot = path.join(cwd, HIDDEN_DIR);
   ensureDir(hiddenRoot);
   const agentsPath = path.join(hiddenRoot, 'AGENTS.md');
   const legacyAgentsPath = path.join(cwd, 'AGENTS.md');
   if (!fs.existsSync(agentsPath) || shouldRefreshTemplates) {
-    const existingMem = fs.existsSync(agentsPath)
-      ? extractClaudeMemContext(fs.readFileSync(agentsPath, 'utf8'))
+    const existingAgentsRaw = fs.existsSync(agentsPath) ? fs.readFileSync(agentsPath, 'utf8') : null;
+    const existingMem = existingAgentsRaw
+      ? extractClaudeMemContext(existingAgentsRaw)
       : (fs.existsSync(legacyAgentsPath) ? extractClaudeMemContext(fs.readFileSync(legacyAgentsPath, 'utf8')) : null);
+
+    let customAppendedSuffix = '';
+    if (existingAgentsRaw && existingCfg && !flags.force) {
+      const oldDefault = renderAgentsMd({
+        lang: existingCfg.lang,
+        mode: existingCfg.mode,
+        cliName: CLI_NAME,
+        pkgName: PACKAGE_NAME,
+        memContext: existingMem
+      });
+      if (existingAgentsRaw.startsWith(oldDefault) && existingAgentsRaw.length > oldDefault.length) {
+        customAppendedSuffix = existingAgentsRaw.slice(oldDefault.length);
+      }
+    }
 
     const agentsContent = renderAgentsMd({
       lang,
@@ -111,7 +126,7 @@ function runInit({ cwd = process.cwd(), flags = {} } = {}) {
       cliName: CLI_NAME,
       pkgName: PACKAGE_NAME,
       memContext: existingMem
-    });
+    }) + customAppendedSuffix;
     fs.writeFileSync(agentsPath, agentsContent, 'utf8');
   }
 

@@ -992,3 +992,74 @@ test('14. round-3 adversarial audit: numeric SRT dialogue, multi-unknown speaker
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('15. round-4 microscope audit: Windows CRLF conflict detection, ja/ko prose conflict detection & preserving user-appended sections in .meetnotes/AGENTS.md across lang switch and upgrade', () => {
+  const tmpDir = makeTempDir('meetnotes-round4-');
+  try {
+    runInit({ cwd: tmpDir, flags: { full: true, lang: 'ja' } });
+
+    // 15a. Append custom user section to .meetnotes/AGENTS.md, then switch --lang en and run upgrade -> custom section preserved!
+    const hiddenAgentsPath = path.join(tmpDir, HIDDEN_DIR, 'AGENTS.md');
+    fs.appendFileSync(hiddenAgentsPath, '\n# USER_APPENDED_TEAM_POLICY_999\nAlways tag security reviewers.\n', 'utf8');
+
+    runInit({ cwd: tmpDir, flags: { full: true, lang: 'en' } });
+    const afterLangSwitch = fs.readFileSync(hiddenAgentsPath, 'utf8');
+    assert.match(afterLangSwitch, /Locked Language\*\*: `en`/);
+    assert.match(afterLangSwitch, /USER_APPENDED_TEAM_POLICY_999/);
+
+    runUpgrade({ cwd: tmpDir });
+    const afterUpgrade = fs.readFileSync(hiddenAgentsPath, 'utf8');
+    assert.match(afterUpgrade, /USER_APPENDED_TEAM_POLICY_999/);
+
+    // 15b. Japanese & Korean natural-language prose conflict detection
+    const jaM1 = createMeeting({
+      cwd: tmpDir,
+      project: 'JP-KR-Proj',
+      title: 'M1',
+      date: '2026-11-01',
+      transcriptText: '[00:00:05] **田中**：リリース日は 12/01、予算は 500万円。출시일은 12/01, 예산은 5000만원.'
+    });
+    fs.appendFileSync(
+      path.join(jaM1.meetingDir, '02-summary.md'),
+      '\n- リリース日は 12/01、予算は 500万円 ([01-transcript.md](./01-transcript.md#L1-L11))\n',
+      'utf8'
+    );
+
+    const jaM2 = createMeeting({
+      cwd: tmpDir,
+      project: 'JP-KR-Proj',
+      title: 'M2',
+      date: '2026-11-20',
+      transcriptText: '[00:00:05] **김팀장**：출시일은 12/15, 예산은 6000만원.'
+    });
+    fs.appendFileSync(
+      path.join(jaM2.meetingDir, '02-summary.md'),
+      '\n- 출시일은 12/15, 예산은 6000만원 ([01-transcript.md](./01-transcript.md#L1-L11))\n',
+      'utf8'
+    );
+
+    const jkInspect = inspectMeetingDirectory(jaM2.meetingDir);
+    assert.equal(jkInspect.conflicts.some((c) => c.key === '預計上線日' && c.previousValue === '12/01' && c.currentValue === '12/15'), true);
+    assert.equal(jkInspect.conflicts.some((c) => c.key === '預算' && c.previousValue === '500万円' && c.currentValue === '6000만원'), true);
+
+    // 15c. Windows CRLF (\r\n) Git merge conflict markers MUST be detected by runCommit!
+    const projDir = path.join(tmpDir, 'project');
+    for (const f of fs.readdirSync(projDir)) {
+      if (f !== 'index.md' && f.endsWith('.md')) {
+        fs.writeFileSync(path.join(projDir, f), `# ${f}\nClean content.\n`, 'utf8');
+      }
+    }
+    const crlfConflictFile = path.join(projDir, '01-spec.md');
+    fs.writeFileSync(
+      crlfConflictFile,
+      '# 01-spec.md\r\n<<<<<<< HEAD\r\nLocal CRLF line\r\n=======\r\nRemote CRLF line\r\n>>>>>>> origin/main\r\n',
+      'utf8'
+    );
+    const crlfCommitRes = runCommit({ cwd: tmpDir });
+    assert.equal(crlfCommitRes.ok, false);
+    assert.equal(crlfCommitRes.reason, 'conflict');
+    assert.equal(crlfCommitRes.conflictFiles.includes('project/01-spec.md'), true);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

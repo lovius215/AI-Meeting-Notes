@@ -18,8 +18,8 @@ function findConflictFiles(cwd) {
     }
   }
 
-  // 2. Scan tracked / project markdown & source files for literal conflict markers
-  const statusRes = runGit(['-c', 'core.quotePath=false', 'status', '--porcelain'], cwd);
+  // 2. Scan tracked & untracked (-uall) markdown & source files for literal conflict markers (LF and CRLF)
+  const statusRes = runGit(['-c', 'core.quotePath=false', 'status', '--porcelain', '-uall'], cwd);
   if (statusRes.ok && statusRes.stdout) {
     for (const line of statusRes.stdout.split(/\r?\n/)) {
       if (!line.trim()) continue;
@@ -33,7 +33,7 @@ function findConflictFiles(cwd) {
       if (fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
         try {
           const content = fs.readFileSync(fullPath, 'utf8');
-          if (/^<{7}\s/m.test(content) && /^={7}$/m.test(content) && /^>{7}\s/m.test(content)) {
+          if (/^<{7}\s/m.test(content) && /^={7}\r?$/m.test(content) && /^>{7}(?:\s|\r?$)/m.test(content)) {
             conflictFiles.add(relPath);
           }
         } catch (_) {

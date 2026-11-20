@@ -73,20 +73,27 @@ function runUpgrade({ cwd = process.cwd(), flags = {} } = {}) {
 
   const actions = [];
 
-  // 1. Update .<targetCli>/AGENTS.md while preserving <claude-mem-context>
+  // 1. Update .<targetCli>/AGENTS.md while preserving <claude-mem-context> AND any user-appended custom sections
   const hiddenRoot = path.join(cwd, targetHiddenDir);
   const agentsPath = path.join(hiddenRoot, 'AGENTS.md');
   const legacyAgentsPath = path.join(cwd, 'AGENTS.md');
-  const existingMem = fs.existsSync(agentsPath)
-    ? extractClaudeMemContext(fs.readFileSync(agentsPath, 'utf8'))
+  const existingAgentsRaw = fs.existsSync(agentsPath) ? fs.readFileSync(agentsPath, 'utf8') : null;
+  const existingMem = existingAgentsRaw
+    ? extractClaudeMemContext(existingAgentsRaw)
     : (fs.existsSync(legacyAgentsPath) ? extractClaudeMemContext(fs.readFileSync(legacyAgentsPath, 'utf8')) : null);
-  const newAgentsContent = renderAgentsMd({
+
+  const baseAgentsContent = renderAgentsMd({
     lang,
     mode,
     cliName: targetCli,
     pkgName: targetPkg,
     memContext: existingMem
   });
+  let customAppendedSuffix = '';
+  if (existingAgentsRaw && !flags.force && existingAgentsRaw.startsWith(baseAgentsContent) && existingAgentsRaw.length > baseAgentsContent.length) {
+    customAppendedSuffix = existingAgentsRaw.slice(baseAgentsContent.length);
+  }
+  const newAgentsContent = baseAgentsContent + customAppendedSuffix;
   actions.push({ type: 'update', file: `${targetHiddenDir}/AGENTS.md`, preservedMem: Boolean(existingMem) });
   if (!isDryRun) {
     ensureDir(hiddenRoot);

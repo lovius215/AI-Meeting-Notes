@@ -167,7 +167,18 @@ function verifyFile(filePath, cwd) {
         continue;
       }
 
-      const targetContent = fs.readFileSync(resolvedRef, 'utf8');
+      let targetContent = '';
+      try {
+        targetContent = fs.readFileSync(resolvedRef, 'utf8');
+      } catch (_) {
+        issues.push({
+          type: 'broken_file',
+          file: relFile,
+          line: lineNum,
+          ref: fullRef
+        });
+        continue;
+      }
       const normalizedTarget = targetContent.replace(/\r?\n$/, '');
       const targetLines = normalizedTarget.length === 0 ? 0 : normalizedTarget.split(/\r?\n/).length;
       if (startLine < 1 || endLine < startLine || endLine > targetLines) {

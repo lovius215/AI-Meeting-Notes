@@ -185,6 +185,11 @@ function isSafePathSegment(seg) {
   return true;
 }
 
+function isSubPath(parentDir, childPath) {
+  const rel = path.relative(path.resolve(parentDir), path.resolve(childPath));
+  return Boolean(rel && !rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
 /**
  * Create a periodic meeting folder under meetings/<project>/<date>_<title>/
  * Enforces strict zero-hallucination, path-traversal prevention, media file validation,
@@ -237,7 +242,7 @@ function createMeeting({
   const projectDir = path.resolve(meetingsRoot, safeProject);
   const meetingDir = path.resolve(projectDir, folderName);
 
-  if (!projectDir.startsWith(meetingsRoot + path.sep) || !meetingDir.startsWith(projectDir + path.sep)) {
+  if (!isSubPath(meetingsRoot, projectDir) || !isSubPath(projectDir, meetingDir)) {
     return {
       ok: false,
       reason: 'invalid_path',
@@ -492,7 +497,7 @@ function generateDeliverableFromTemplate({
   const deliverablesDir = path.resolve(meetingDir, 'deliverables');
   ensureDir(deliverablesDir);
   const outPath = path.resolve(deliverablesDir, outputName);
-  if (!outPath.startsWith(deliverablesDir + path.sep)) {
+  if (!isSubPath(deliverablesDir, outPath)) {
     return { ok: false, reason: 'invalid_output_name', error: 'Path traversal detected in outputName.' };
   }
 
@@ -526,8 +531,8 @@ function extractKeyFacts(mdContent, sourceLabel) {
   ]);
 
   const normalizeFactKey = (k) => {
-    if (/上線日|launch\s*date/i.test(k)) return '預計上線日';
-    if (/預算|budget/i.test(k)) return '預算';
+    if (/上線日|上线日|launch\s*date|リリース日|公開日|ローンチ日|출시일|오픈일|런칭일/i.test(k)) return '預計上線日';
+    if (/預算|预算|budget|予算|예산/i.test(k)) return '預算';
     return k;
   };
 
@@ -548,18 +553,22 @@ function extractKeyFacts(mdContent, sourceLabel) {
       }
     }
 
-    // 2. Natural-language prose: 上線日 / 上线日 / Launch Date (zh-TW, zh-CN, en)
+    // 2. Natural-language prose: 上線日 / 上线日 / Launch Date / リリース日 / 출시일 (zh-TW, zh-CN, en, ja, ko)
     const launchMatch =
       rawLine.match(/(?:預計|预计)?(?:上線日|上线日)(?:期)?(?:鎖定在|锁定在|鎖定為|锁定为|定在|定為|定为|改為|改为|延後到|延后到|延後至|延后至|延至|調整至|调整至|調整為|调整为|為|为|是|[:：]\s*)\s*([0-9]{4}[-/][0-9]{1,2}[-/][0-9]{1,2}|[0-9]{1,2}\/[0-9]{1,2}|[0-9]{1,2}月[0-9]{1,2}日)/) ||
-      rawLine.match(/launch\s+date(?:\s+is|\s+was)?(?:\s+set\s+to|\s+locked\s+at|\s+changed\s+to|\s+moved\s+to|\s+delayed\s+to|[:：]\s*)\s*([0-9]{4}[-/][0-9]{1,2}[-/][0-9]{1,2}|[0-9]{1,2}\/[0-9]{1,2}|[A-Za-z]+\s+\d{1,2})/i);
+      rawLine.match(/launch\s+date(?:\s+is|\s+was)?(?:\s+set\s+to|\s+locked\s+at|\s+changed\s+to|\s+moved\s+to|\s+delayed\s+to|[:：]\s*)\s*([0-9]{4}[-/][0-9]{1,2}[-/][0-9]{1,2}|[0-9]{1,2}\/[0-9]{1,2}|[A-Za-z]+\s+\d{1,2})/i) ||
+      rawLine.match(/(?:リリース日|公開日|ローンチ日)(?:は|を|が|[:：]\s*)\s*([0-9]{4}[-/][0-9]{1,2}[-/][0-9]{1,2}|[0-9]{1,2}\/[0-9]{1,2}|[0-9]{1,2}月[0-9]{1,2}日)/) ||
+      rawLine.match(/(?:출시일|오픈일|런칭일)(?:은|는|을|를|이|가|[:：]\s*)\s*([0-9]{4}[-/][0-9]{1,2}[-/][0-9]{1,2}|[0-9]{1,2}\/[0-9]{1,2}|[0-9]{1,2}월\s*[0-9]{1,2}일)/);
     if (launchMatch) {
       facts['預計上線日'] = { value: launchMatch[1].trim(), line: lineNum, source: sourceLabel };
     }
 
-    // 3. Natural-language prose: 預算 / 预算 / Budget (zh-TW, zh-CN, en)
+    // 3. Natural-language prose: 預算 / 预算 / Budget / 予算 / 예산 (zh-TW, zh-CN, en, ja, ko)
     const budgetMatch =
       rawLine.match(/(?:預算|预算)(?:金額|金额|上限)?(?:鎖定在|锁定在|鎖定為|锁定为|定在|定為|定为|改為|改为|調整為|调整为|調整至|调整至|增加到|提高到|降為|降为|為|为|是|[:：]\s*)\s*([0-9.,]+\s*(?:萬|万|億|亿|元|k|K|M|USD|TWD|NTD)?)/) ||
-      rawLine.match(/budget(?:\s+is|\s+was)?(?:\s+set\s+to|\s+locked\s+at|\s+changed\s+to|\s+increased\s+to|\s+reduced\s+to|[:：]\s*)\s*(\$?[0-9.,]+\s*(?:k|K|M|USD|TWD)?)/i);
+      rawLine.match(/budget(?:\s+is|\s+was)?(?:\s+set\s+to|\s+locked\s+at|\s+changed\s+to|\s+increased\s+to|\s+reduced\s+to|[:：]\s*)\s*(\$?[0-9.,]+\s*(?:k|K|M|USD|TWD)?)/i) ||
+      rawLine.match(/予算(?:上限|金額)?(?:は|を|が|[:：]\s*)\s*([0-9.,]+\s*(?:万円|億円|円|万|k|K|M|USD|JPY)?)/) ||
+      rawLine.match(/예산(?:은|는|을|를|이|가|[:：]\s*)\s*([0-9.,]+\s*(?:만원|억원|원|만|k|K|M|USD|KRW)?)/);
     if (budgetMatch) {
       facts['預算'] = { value: budgetMatch[1].trim(), line: lineNum, source: sourceLabel };
     }
