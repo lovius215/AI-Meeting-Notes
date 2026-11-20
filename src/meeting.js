@@ -1208,11 +1208,73 @@ function inspectMeetingDirectory(meetingDir) {
   };
 }
 
+/**
+ * Synchronize the recorded `transcript-sha256` metadata comment in downstream meeting files
+ * (`02-summary.md`, `03-todos-and-discussion.md`) with the current `01-transcript.md` without
+ * overwriting any human-edited prose. Useful after minor manual typo fixes in `01-transcript.md`.
+ */
+function syncTranscriptHash(meetingDir) {
+  if (!meetingDir || !fs.existsSync(meetingDir) || !fs.statSync(meetingDir).isDirectory()) {
+    return {
+      ok: false,
+      error: `Meeting directory does not exist: ${meetingDir}`
+    };
+  }
+  const transcriptPath = path.join(meetingDir, '01-transcript.md');
+  if (!fs.existsSync(transcriptPath) || !fs.statSync(transcriptPath).isFile()) {
+    return {
+      ok: false,
+      error: `01-transcript.md not found in: ${meetingDir}`
+    };
+  }
+
+  const currentHash = crypto
+    .createHash('sha256')
+    .update(fs.readFileSync(transcriptPath, 'utf8'))
+    .digest('hex')
+    .slice(0, 16);
+
+  const updatedFiles = [];
+  const alreadySyncedFiles = [];
+  const hashTokenRegex = /(transcript-sha256:\s*)([0-9a-f]{8,64})/i;
+
+  for (const fname of ['02-summary.md', '03-todos-and-discussion.md']) {
+    const fpath = path.join(meetingDir, fname);
+    if (!fs.existsSync(fpath) || !fs.statSync(fpath).isFile()) continue;
+
+    const content = fs.readFileSync(fpath, 'utf8');
+    const match = content.match(hashTokenRegex);
+    if (match) {
+      if (match[2] === currentHash) {
+        alreadySyncedFiles.push(fname);
+        continue;
+      }
+      const updated = content.replace(hashTokenRegex, `$1${currentHash}`);
+      fs.writeFileSync(fpath, updated, 'utf8');
+      updatedFiles.push(fname);
+    } else {
+      const separator = content.endsWith('\n') ? '' : '\n';
+      const updated = `${content}${separator}<!-- transcript-sha256: ${currentHash} -->\n`;
+      fs.writeFileSync(fpath, updated, 'utf8');
+      updatedFiles.push(fname);
+    }
+  }
+
+  return {
+    ok: true,
+    meetingDir,
+    transcriptSha256: currentHash,
+    updatedFiles,
+    alreadySyncedFiles
+  };
+}
+
 module.exports = {
   getMediaMetadata,
   applySpeakerMapping,
   createMeeting,
   generateDeliverableFromTemplate,
   extractKeyFacts,
-  inspectMeetingDirectory
+  inspectMeetingDirectory,
+  syncTranscriptHash
 };

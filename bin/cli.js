@@ -13,7 +13,7 @@ const { runUpgrade } = require('../src/upgrade');
 const { runStatus } = require('../src/status');
 const { runScaffold } = require('../src/scaffold');
 const { runBuild } = require('../src/build');
-const { createMeeting, inspectMeetingDirectory, generateDeliverableFromTemplate } = require('../src/meeting');
+const { createMeeting, inspectMeetingDirectory, generateDeliverableFromTemplate, syncTranscriptHash } = require('../src/meeting');
 
 function printHelp(lang = 'zh-TW') {
   console.log(`
@@ -55,6 +55,9 @@ Standard Commands:
 
   inspect [meetingDir]
       Runs the 7-dimension Post-Creation Inspection Rule (returns non-zero if files/citations are missing or if 🚨 Human-in-the-Loop / ⚡ Cross-Meeting Conflicts require review)
+
+  sync-hash [meetingDir]
+      Synchronizes transcript-sha256 in 02-summary.md and 03-todos-and-discussion.md with the current 01-transcript.md after manual edits without overwriting prose
 
   deliverable --meeting <dir> --template <file> [--out <filename.md>] [--FIELD value] [--force]
       Generates a post-meeting deliverable from a template into deliverables/, flagging any unmentioned fields with ⚠️ [會議未提及 - 需人工補填] (refuses to overwrite existing file unless --force is passed, saving .bak backup)
@@ -182,6 +185,23 @@ function main(argv = process.argv.slice(2)) {
       const res = inspectMeetingDirectory(meetingDir);
       console.log(JSON.stringify(res, null, 2));
       return res.ok ? 0 : 1;
+    }
+    case 'sync-hash': {
+      const path = require('node:path');
+      const meetingDir = target
+        ? (path.isAbsolute(target) ? target : path.join(cwd, target))
+        : cwd;
+      const res = syncTranscriptHash(meetingDir);
+      if (!res.ok) {
+        console.error(`⛔ ${res.error}`);
+        return 1;
+      }
+      if (res.updatedFiles.length > 0) {
+        console.log(`✅ Synced transcript-sha256 (${res.transcriptSha256}) in: ${res.updatedFiles.join(', ')}`);
+      } else {
+        console.log(`✅ Already in sync (${res.transcriptSha256}): ${res.alreadySyncedFiles.join(', ') || 'no downstream files'}`);
+      }
+      return 0;
     }
     case 'deliverable': {
       const path = require('node:path');

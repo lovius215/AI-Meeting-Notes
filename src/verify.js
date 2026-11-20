@@ -127,11 +127,13 @@ function verifyFile(filePath, cwd) {
     }
 
     // 2. Check source file & line references (#L10 or #L10-L20)
-    // Strip remote HTTP/HTTPS URLs first so GitHub permalinks (https://github.com/.../a.js#L1-L2) never trigger local file errors
-    const lineWithoutRemoteUrls = lineWithoutInlineCode.replace(/https?:\/\/[^\s)\]>]+/gi, '');
+    // Strip remote HTTP/HTTPS URLs first (including balanced parentheses like Wikipedia URLs) so remote permalinks never trigger local file errors
+    const lineWithoutRemoteUrls = lineWithoutInlineCode.replace(/https?:\/\/(?:[^\s()[\]<>]+|\([^\s()[\]<>]+\))+/gi, '');
 
-    // Support Unicode/CJK folder and file names (e.g. ../2026-11-13_週會/02-summary.md#L1-L5) while stopping at ASCII & CJK delimiters
-    const refRegex = /(?:file:\/\/)?([^\s()[\]<>'"`#（）：，。；、！？「」『』【】]+?\.[A-Za-z0-9]+)#L(\d+)(?:-L?(\d+))?/g;
+    // Support Unicode/CJK folder and file names AND balanced parentheses in paths (e.g. 2026-11-20_週會_(上午場)/01-transcript.md#L1-L5)
+    // while still stopping at Markdown link delimiters `(...)` and ASCII/CJK punctuation
+    const pathAtom = `(?:[^\\s()\\[\\]<>'"\`#（）：，。；、！？「」『』【】]|\\([^\\s()\\[\\]<>'"\`#（）：，。；、！？「」『』【】]+\\))`;
+    const refRegex = new RegExp(`(?:file:\\/\\/)?(${pathAtom}+?\\.[A-Za-z0-9]+)#L(\\d+)(?:-L?(\\d+))?`, 'g');
     let rMatch;
     while ((rMatch = refRegex.exec(lineWithoutRemoteUrls)) !== null) {
       const fullRef = rMatch[0];
@@ -268,7 +270,7 @@ function runVerify({ cwd = process.cwd(), target = null, silent = false } = {}) 
       } else if (iss.type === 'broken_lines') {
         console.error('  - ' + t(lang, 'brokenRefLines', iss.file, iss.line, iss.ref, iss.maxLine));
       } else if (iss.type === 'stale_transcript') {
-        console.error(`  - [逐字稿已更新 / Stale Hash] ${iss.file} 記錄之逐字稿指紋 (${iss.recordedHash}) 與現行 01-transcript.md (${iss.expectedHash}) 不符，請重新同步摘要與待辦或執行 --force-all。`);
+        console.error(`  - [逐字稿已更新 / Stale Hash] ${iss.file} 記錄之逐字稿指紋 (${iss.recordedHash}) 與現行 01-transcript.md (${iss.expectedHash}) 不符，請執行 --force-all 重生，或人工確認無誤後執行 meetnotes sync-hash 同步指紋。`);
       }
     }
   }

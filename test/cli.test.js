@@ -9,7 +9,7 @@ const path = require('node:path');
 const { CLI_NAME, HIDDEN_DIR, CONFIG_FILENAME } = require('../src/config');
 const { parseCliArgs, readConfig } = require('../src/utils');
 const { getInitPrompts } = require('../src/i18n');
-const { promptInitFeatures } = require('../bin/cli');
+const { main, promptInitFeatures } = require('../bin/cli');
 const { runInit } = require('../src/init');
 const { runVerify } = require('../src/verify');
 const { runCommit } = require('../src/commit');
@@ -22,7 +22,8 @@ const {
   applySpeakerMapping,
   createMeeting,
   generateDeliverableFromTemplate,
-  inspectMeetingDirectory
+  inspectMeetingDirectory,
+  syncTranscriptHash
 } = require('../src/meeting');
 
 function makeTempDir(prefix = 'genaitool-test-') {
@@ -1690,6 +1691,106 @@ test('18. BUG-001~BUG-007 regression suite: general discussion vs 🟢 decision,
     const staleCommit = runCommit({ cwd: tmpDir, target: mActions.meetingDir, flags: { m: 'should block stale', 'no-push': true } });
     assert.equal(staleCommit.ok, false);
     assert.equal(staleCommit.reason, 'verify_failed');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('19. Parenthesized paths in Markdown #Lx-Ly refs and meetnotes sync-hash command', () => {
+  const tmpDir = makeTempDir();
+  try {
+    runInit({ cwd: tmpDir, flags: { lang: 'zh-TW' } });
+
+    // Part A: Folder and file names containing balanced parentheses () must verify cleanly
+    const parenDir = path.join(tmpDir, 'meetings', 'Project(v2)', '2026-11-20_週會_(上午場)');
+    fs.mkdirSync(parenDir, { recursive: true });
+    const parenTranscript = path.join(parenDir, '01-transcript.md');
+    const parenNotes = path.join(parenDir, 'notes(final).md');
+    fs.writeFileSync(parenTranscript, 'line1\nline2\nline3\nline4\n', 'utf8');
+    fs.writeFileSync(parenNotes, 'note1\nnote2\n', 'utf8');
+
+    const parenSummary = path.join(parenDir, '02-summary.md');
+    fs.writeFileSync(
+      parenSummary,
+      [
+        '# Summary',
+        '- 🟢 決議一（來源：[01-transcript.md](2026-11-20_週會_(上午場)/01-transcript.md#L1-L3)）',
+        '- 🟢 決議二（來源：[notes](notes(final).md#L1-L2)）',
+        '- 🟢 決議三（來源：[full](meetings/Project(v2)/2026-11-20_週會_(上午場)/01-transcript.md#L2-L4)）',
+        '- 遠端連結忽略：https://en.wikipedia.org/wiki/Markdown_(markup)#L999'
+      ].join('\n') + '\n',
+      'utf8'
+    );
+
+    // Note: relative from parenDir, 2026-11-20_週會_(上午場)/01-transcript.md won't exist unless referenced from Project(v2)/index.md;
+    // test both from parent index.md and sibling notes(final).md
+    const parentIndex = path.join(tmpDir, 'meetings', 'Project(v2)', 'index.md');
+    fs.writeFileSync(
+      parentIndex,
+      '# Project(v2)\n- [上午場逐字稿](2026-11-20_週會_(上午場)/01-transcript.md#L1-L4)\n',
+      'utf8'
+    );
+    fs.writeFileSync(
+      parenSummary,
+      [
+        '# Summary',
+        '- 🟢 決議一（來源：[01-transcript.md](./01-transcript.md#L1-L3)）',
+        '- 🟢 決議二（來源：[notes](notes(final).md#L1-L2)）',
+        '- 🟢 決議三（來源：[full](meetings/Project(v2)/2026-11-20_週會_(上午場)/01-transcript.md#L2-L4)）',
+        '- 遠端連結忽略：https://en.wikipedia.org/wiki/Markdown_(markup)#L999'
+      ].join('\n') + '\n',
+      'utf8'
+    );
+
+    const parenVerifyOk = runVerify({ cwd: tmpDir, target: path.join(tmpDir, 'meetings', 'Project(v2)'), silent: true });
+    assert.equal(parenVerifyOk.ok, true, `Expected parenthesized refs to verify, got: ${JSON.stringify(parenVerifyOk.issues)}`);
+
+    // Out-of-range line on parenthesized path must still be caught as broken_lines
+    fs.appendFileSync(parenSummary, '- Bad range: [notes](notes(final).md#L1-L99)\n', 'utf8');
+    const parenVerifyBad = runVerify({ cwd: tmpDir, target: parenSummary, silent: true });
+    assert.equal(parenVerifyBad.ok, false);
+    assert.equal(parenVerifyBad.issues.some((i) => i.type === 'broken_lines'), true);
+
+    // Part B: sync-hash unlocks stale_transcript after manual typo edit while preserving custom prose
+    const mSync = createMeeting({
+      cwd: tmpDir,
+      project: 'SyncProj',
+      title: 'Typo-Fix',
+      date: '2026-11-20',
+      transcriptText: '[00:00:01] **王經理**：決議預算為 50 萬，請李工程師負責於 11/25 前完成。\n'
+    });
+    assert.equal(mSync.ok, true);
+
+    // Human edits 02-summary.md with custom insight
+    const sumPath = path.join(mSync.meetingDir, '02-summary.md');
+    const todosPath = path.join(mSync.meetingDir, '03-todos-and-discussion.md');
+    fs.appendFileSync(sumPath, '\n<!-- custom-note -->\n- 🟡 人工補充的重要備註\n', 'utf8');
+
+    // Human manually fixes a typo in 01-transcript.md
+    const transPath = path.join(mSync.meetingDir, '01-transcript.md');
+    const fixedTrans = fs.readFileSync(transPath, 'utf8').replace('50 萬', '50 萬元');
+    fs.writeFileSync(transPath, fixedTrans, 'utf8');
+
+    // Verify must now fail with stale_transcript
+    const beforeSync = runVerify({ cwd: tmpDir, target: mSync.meetingDir, silent: true });
+    assert.equal(beforeSync.ok, false);
+    assert.equal(beforeSync.issues.some((i) => i.type === 'stale_transcript'), true);
+
+    // Run CLI `meetnotes sync-hash <meetingDir>`
+    const exitCode = main(['sync-hash', mSync.meetingDir]);
+    assert.equal(exitCode, 0);
+
+    // Verify must now pass and human-edited prose must remain 100% intact
+    const afterSync = runVerify({ cwd: tmpDir, target: mSync.meetingDir, silent: true });
+    assert.equal(afterSync.ok, true, `Expected verify to pass after sync-hash, got: ${JSON.stringify(afterSync.issues)}`);
+    assert.match(fs.readFileSync(sumPath, 'utf8'), /人工補充的重要備註/);
+    assert.equal(fs.existsSync(todosPath), true);
+
+    // Second call to syncTranscriptHash is idempotent
+    const secondSync = syncTranscriptHash(mSync.meetingDir);
+    assert.equal(secondSync.ok, true);
+    assert.deepEqual(secondSync.updatedFiles, []);
+    assert.deepEqual(secondSync.alreadySyncedFiles, ['02-summary.md', '03-todos-and-discussion.md']);
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
