@@ -53,17 +53,27 @@ function applySpeakerMapping({ transcriptText = '', mapping = {}, terms = {} } =
   const normalizedLines = [];
   let activeTimestamp = null;
 
+  const tsLineRegex = /^((?:\d{2}:)?\d{2}:\d{2})[.,]\d{3}\s*-->\s*(?:\d{2}:)?\d{2}:\d{2}[.,]\d{3}(?:\s+.*)?$/;
+
   for (let i = 0; i < rawLines.length; i++) {
     const line = rawLines[i].trim();
     if (!line) {
       activeTimestamp = null;
       continue;
     }
-    if (line === 'WEBVTT' || /^NOTE(?:\s|$)/.test(line) || /^\d+$/.test(line)) {
+    if (line === 'WEBVTT' || /^NOTE(?:\s|$)/.test(line)) {
       continue;
     }
+    // Only skip a bare integer line if the next non-empty line is a timestamp (SRT cue sequence number),
+    // so numeric dialogue lines (e.g. "500000" or "2026") are never accidentally stripped!
+    if (/^\d+$/.test(line)) {
+      const nextLine = (rawLines[i + 1] || '').trim();
+      if (tsLineRegex.test(nextLine)) {
+        continue;
+      }
+    }
     // Match SRT/VTT timestamp line: either HH:MM:SS.mmm or MM:SS.mmm (with comma or dot, and optional cue settings)
-    const tsMatch = line.match(/^((?:\d{2}:)?\d{2}:\d{2})[.,]\d{3}\s*-->\s*(?:\d{2}:)?\d{2}:\d{2}[.,]\d{3}(?:\s+.*)?$/);
+    const tsMatch = line.match(tsLineRegex);
     if (tsMatch) {
       activeTimestamp = normalizeTimestamp(tsMatch[1]);
       continue;
@@ -83,31 +93,47 @@ function applySpeakerMapping({ transcriptText = '', mapping = {}, terms = {} } =
   const uncertaintyFlags = [];
   const outputLines = [];
 
+  // Prepare single-pass simultaneous regexes for terms and speakers (sorted longest-key first)
+  // so replacements never cascade into already-replaced text (e.g. Alex -> Alex Chen, Chen -> Manager Chen)
+  const termEntries = Object.entries(terms || {}).filter(([k, v]) => k && v !== undefined && v !== null);
+  termEntries.sort((a, b) => b[0].length - a[0].length);
+  const termMap = new Map(termEntries.map(([k, v]) => [k, String(v)]));
+  const termRegex = termEntries.length > 0
+    ? new RegExp(termEntries.map(([k]) => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g')
+    : null;
+
+  const speakerEntries = Object.entries(mapping || {}).filter(([k, v]) => k && v);
+  speakerEntries.sort((a, b) => b[0].length - a[0].length);
+  const speakerMap = new Map(speakerEntries.map(([k, v]) => [k, String(v)]));
+  const speakerRegex = speakerEntries.length > 0
+    ? new RegExp(
+        `(?<![A-Za-z0-9_])(?:${speakerEntries.map(([k]) => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})(?![A-Za-z0-9_])`,
+        'g'
+      )
+    : null;
+
   for (let idx = 0; idx < normalizedLines.length; idx++) {
     let line = normalizedLines[idx];
 
-    // Replace terminology errors first
-    for (const [wrongTerm, rightTerm] of Object.entries(terms)) {
-      if (wrongTerm && line.includes(wrongTerm)) {
-        line = line.split(wrongTerm).join(rightTerm);
-      }
+    // 1. Single-pass terminology replacement
+    if (termRegex) {
+      line = line.replace(termRegex, (matched) => termMap.get(matched) ?? matched);
     }
 
-    // Replace mapped speakers (supports both ASCII SPEAKER_00 and Unicode/CJK labels like 語者A / 發言人1)
-    for (const [speakerId, realName] of Object.entries(mapping)) {
-      if (speakerId && realName) {
-        const escaped = speakerId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const regex = new RegExp(`(?<![A-Za-z0-9_])${escaped}(?![A-Za-z0-9_])`, 'g');
-        line = line.replace(regex, `**${realName}**`);
-      }
+    // 2. Single-pass speaker replacement (supports both ASCII SPEAKER_00 and Unicode/CJK labels like 語者A / 發言人1)
+    if (speakerRegex) {
+      line = line.replace(speakerRegex, (matched) => `**${speakerMap.get(matched)}**`);
     }
 
-    // Detect remaining unmapped SPEAKER_XX or Speaker A/B tokens
-    const unknownMatch = line.match(/\b(SPEAKER_\d+|Speaker\s+[A-Z0-9]+)\b/);
-    if (unknownMatch) {
-      const unk = unknownMatch[1];
+    // 3. Detect ALL remaining unmapped SPEAKER_XX, Speaker A/B, or CJK 語者X / 發言人X / 話者X / 화자X tokens on the line
+    const unknownSpeakerGlobalRegex = /(?<![A-Za-z0-9_])(SPEAKER_\d+|Speaker\s+[A-Z0-9]+|(?:語者|發言人|发言人|話者|화자)\s*[A-Z0-9一二三四五六七八九十甲乙丙丁]+)(?![A-Za-z0-9_])/g;
+    const foundUnknownsOnLine = [];
+    line = line.replace(unknownSpeakerGlobalRegex, (unk) => {
       unmappedSpeakers.add(unk);
-      line = line.replace(unk, `⚠️ [待確認語者: ${unk}]`);
+      foundUnknownsOnLine.push(unk);
+      return `⚠️ [待確認語者: ${unk}]`;
+    });
+    for (const unk of foundUnknownsOnLine) {
       uncertaintyFlags.push({
         type: 'unknown_speaker',
         speaker: unk,
@@ -509,11 +535,13 @@ function extractKeyFacts(mdContent, sourceLabel) {
     const rawLine = lines[i];
     const lineNum = i + 1;
 
-    // 1. Structured `- **Key**: Value`
+    // 1. Structured `- **Key**: Value` (strip trailing parenthetical source/line citations before comparison)
     const m = rawLine.match(factRegex);
     if (m) {
       const rawKey = m[1].trim();
-      const val = m[2].replace(/\s*\(來源[:：].*?\)\s*$/, '').trim();
+      const val = m[2]
+        .replace(/\s*(?:\([^()\r\n]*#L\d+[^()\r\n]*\)|（[^（）\r\n]*#L\d+[^（）\r\n]*）|\((?:來源|来源|見|见|參見|参见|source|see)[\s:：].*?\)|（(?:來源|来源|見|见|參見|参见)[\s:：].*?）)\s*$/i, '')
+        .trim();
       if (!ignoreKeys.has(rawKey) && val && !val.startsWith('{{')) {
         const key = normalizeFactKey(rawKey);
         facts[key] = { value: val, line: lineNum, source: sourceLabel };
@@ -546,6 +574,21 @@ function extractKeyFacts(mdContent, sourceLabel) {
  * items (⚠️ / 🚨 / SPEAKER_XX) AND zero unresolved cross-meeting conflicts (⚡).
  */
 function inspectMeetingDirectory(meetingDir) {
+  if (!meetingDir || !fs.existsSync(meetingDir) || !fs.statSync(meetingDir).isDirectory()) {
+    return {
+      ok: false,
+      exists: false,
+      structureOk: false,
+      needsHumanReview: false,
+      meetingDir,
+      missingFiles: ['01-transcript.md', '02-summary.md', '03-todos-and-discussion.md'],
+      uncitedItems: [],
+      verifyIssues: [],
+      humanInterventionItems: [],
+      conflicts: []
+    };
+  }
+
   const requiredFiles = ['01-transcript.md', '02-summary.md', '03-todos-and-discussion.md'];
   const missingFiles = requiredFiles.filter((f) => !fs.existsSync(path.join(meetingDir, f)));
   const humanInterventionItems = [];
@@ -553,10 +596,16 @@ function inspectMeetingDirectory(meetingDir) {
   const uncitedItems = [];
   const verifyIssues = [];
 
+  const projectDir = path.dirname(meetingDir);
+  const meetingsRoot = path.dirname(projectDir);
+  const workspaceRoot = path.basename(meetingsRoot) === 'meetings'
+    ? path.dirname(meetingsRoot)
+    : projectDir;
+
   for (const fname of requiredFiles) {
     const fpath = path.join(meetingDir, fname);
     if (!fs.existsSync(fpath)) continue;
-    verifyIssues.push(...verifyFile(fpath, meetingDir));
+    verifyIssues.push(...verifyFile(fpath, workspaceRoot));
     const content = fs.readFileSync(fpath, 'utf8');
     const lines = content.split(/\r?\n/);
 
@@ -587,7 +636,7 @@ function inspectMeetingDirectory(meetingDir) {
     for (const df of fs.readdirSync(deliverablesDir)) {
       if (!df.endsWith('.md')) continue;
       const dfPath = path.join(deliverablesDir, df);
-      verifyIssues.push(...verifyFile(dfPath, meetingDir));
+      verifyIssues.push(...verifyFile(dfPath, workspaceRoot));
       const dLines = fs.readFileSync(dfPath, 'utf8').split(/\r?\n/);
       for (let i = 0; i < dLines.length; i++) {
         if (/⚠️\s*\[(需人為確認|待確認語者|會議未提及)[^\]]*\]/.test(dLines[i])) {
@@ -602,18 +651,12 @@ function inspectMeetingDirectory(meetingDir) {
   }
 
   // Cross-meeting conflict check against earlier meetings and index.md in the same project folder
-  const projectDir = path.dirname(meetingDir);
   const currentFolder = path.basename(meetingDir);
   const currentSummaryPath = path.join(meetingDir, '02-summary.md');
 
   if (fs.existsSync(currentSummaryPath) && fs.existsSync(projectDir)) {
     const currentFacts = extractKeyFacts(fs.readFileSync(currentSummaryPath, 'utf8'), `${currentFolder}/02-summary.md`);
     const baselineFacts = {};
-
-    const indexPath = path.join(projectDir, 'index.md');
-    if (fs.existsSync(indexPath)) {
-      Object.assign(baselineFacts, extractKeyFacts(fs.readFileSync(indexPath, 'utf8'), 'index.md'));
-    }
 
     const siblings = fs.readdirSync(projectDir, { withFileTypes: true })
       .filter((d) => d.isDirectory() && d.name !== 'templates' && d.name < currentFolder)
@@ -625,6 +668,12 @@ function inspectMeetingDirectory(meetingDir) {
       if (fs.existsSync(sibSummary)) {
         Object.assign(baselineFacts, extractKeyFacts(fs.readFileSync(sibSummary, 'utf8'), `${sib}/02-summary.md`));
       }
+    }
+
+    // Active rolling snapshot in index.md takes precedence over older superseded meetings
+    const indexPath = path.join(projectDir, 'index.md');
+    if (fs.existsSync(indexPath)) {
+      Object.assign(baselineFacts, extractKeyFacts(fs.readFileSync(indexPath, 'utf8'), 'index.md'));
     }
 
     for (const [key, curr] of Object.entries(currentFacts)) {

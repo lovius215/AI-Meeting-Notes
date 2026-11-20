@@ -124,21 +124,21 @@ function main(argv = process.argv.slice(2)) {
     }
     case 'meeting':
     case 'new-meeting': {
+      if (
+        flags.project === true ||
+        flags.title === true ||
+        flags.date === true ||
+        flags.media === true ||
+        flags.transcript === true ||
+        flags.map === true ||
+        flags.text === true
+      ) {
+        console.error('⛔ Missing argument value for option flag (--project, --title, --date, --media, --transcript, --map, or --text).');
+        return 1;
+      }
       const project = typeof flags.project === 'string' ? flags.project : (target || 'Project-A');
       const title = typeof flags.title === 'string' ? flags.title : (positional[2] || 'Weekly-Sync');
       const date = typeof flags.date === 'string' ? flags.date : new Date().toISOString().slice(0, 10);
-      if (flags.date === true) {
-        console.error('Missing value for --date (expected YYYY-MM-DD).');
-        return 1;
-      }
-      if (flags.media === true) {
-        console.error('Missing file path for --media.');
-        return 1;
-      }
-      if (flags.transcript === true) {
-        console.error('Missing file path for --transcript.');
-        return 1;
-      }
       const mapping = {};
       if (typeof flags.map === 'string') {
         for (const pair of flags.map.split(',')) {

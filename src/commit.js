@@ -161,8 +161,18 @@ function runCommit({ cwd = process.cwd(), target = null, flags = {} } = {}) {
   const commitMsg = flags.m || flags.message || `chore(archive): verify and archive ${target || 'project'} [${cfg.lang}]`;
   const commitRes = runGit(['commit', '-m', commitMsg], cwd);
   if (!commitRes.ok) {
-    console.log(t(lang, 'commitNothing'));
-    return { ok: true, committed: false, excludedSensitive };
+    const combinedOut = `${commitRes.stdout || ''}\n${commitRes.stderr || ''}`;
+    if (/nothing to commit|nothing added to commit|working tree clean/i.test(combinedOut)) {
+      console.log(t(lang, 'commitNothing'));
+      return { ok: true, committed: false, excludedSensitive };
+    }
+    console.error(commitRes.stderr || commitRes.stdout || 'git commit failed');
+    return {
+      ok: false,
+      reason: 'commit_failed',
+      error: commitRes.stderr || commitRes.stdout || 'git commit failed',
+      excludedSensitive
+    };
   }
 
   const hashRes = runGit(['rev-parse', '--short', 'HEAD'], cwd);

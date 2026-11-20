@@ -83,14 +83,27 @@ function verifyFile(filePath, cwd) {
   const lines = content.split(/\r?\n/);
 
   let inCodeBlock = false;
+  let fenceChar = '';
+  let fenceLen = 0;
 
   for (let i = 0; i < lines.length; i++) {
     const lineNum = i + 1;
     const rawLine = lines[i];
 
-    if (/^\s*```/.test(rawLine)) {
-      inCodeBlock = !inCodeBlock;
-      continue;
+    const fenceMatch = rawLine.match(/^\s*(`{3,}|~{3,})/);
+    if (fenceMatch) {
+      const matchedFence = fenceMatch[1];
+      if (!inCodeBlock) {
+        inCodeBlock = true;
+        fenceChar = matchedFence[0];
+        fenceLen = matchedFence.length;
+        continue;
+      } else if (matchedFence[0] === fenceChar && matchedFence.length >= fenceLen && /^\s*(`{3,}|~{3,})\s*$/.test(rawLine)) {
+        inCodeBlock = false;
+        fenceChar = '';
+        fenceLen = 0;
+        continue;
+      }
     }
 
     if (inCodeBlock) continue;

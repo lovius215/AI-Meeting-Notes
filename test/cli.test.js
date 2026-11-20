@@ -888,3 +888,107 @@ test('13. 360-degree deep audit: CJK path #Lx-Ly citations, CJK speaker tags, in
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('14. round-3 adversarial audit: numeric SRT dialogue, multi-unknown speakers, non-cascading replacement, 4-backtick/tilde fences, index.md snapshot precedence & commit failure propagation', () => {
+  const { main } = require('../bin/cli');
+
+  // 14a. Numeric dialogue lines ("500000") preserved in SRT, multiple unknown speakers (ASCII & CJK) flagged, and non-cascading single-pass replacement
+  const mapped = applySpeakerMapping({
+    transcriptText: [
+      '1',
+      '00:00:05,000 --> 00:00:08,000',
+      'Alex: 預算數字是',
+      '500000',
+      '',
+      '2',
+      '00:00:09,000 --> 00:00:12,000',
+      'SPEAKER_01 與 語者B 同時討論 API 與 REST 架構。'
+    ].join('\n'),
+    mapping: { Alex: 'Alex Chen', Chen: 'Manager Chen' },
+    terms: { API: 'REST API', REST: 'GraphQL' }
+  });
+  // "500000" must NOT be stripped as an SRT cue index!
+  assert.equal(mapped.lines.some((l) => l.includes('500000')), true);
+  // Single-pass replacement: "Alex" -> "**Alex Chen**", NOT "**Alex **Manager Chen****"
+  assert.equal(mapped.lines[0], '[00:00:05] **Alex Chen**: 預算數字是');
+  // Single-pass terms: "API" -> "REST API", "REST" -> "GraphQL"
+  assert.match(mapped.lines[2], /REST API 與 GraphQL 架構/);
+  // Both SPEAKER_01 and 語者B on the same line must be detected
+  assert.deepEqual(mapped.unmappedSpeakers.sort(), ['SPEAKER_01', '語者B'].sort());
+  assert.equal(mapped.uncertaintyFlags.filter((u) => u.type === 'unknown_speaker').length, 2);
+
+  // 14b. Non-existent directory in inspectMeetingDirectory & value-less --project flag in CLI
+  const nonExistentInspect = inspectMeetingDirectory('/tmp/does-not-exist-meeting-dir-99999');
+  assert.equal(nonExistentInspect.ok, false);
+  assert.equal(nonExistentInspect.exists, false);
+  assert.equal(main(['new-meeting', '--project']), 1);
+
+  // 14c. 4-backtick outer code blocks & ~~~ tilde code blocks in verifyFile and markdownToHtmlBody
+  const tmpDir = makeTempDir('meetnotes-round3-');
+  try {
+    runInit({ cwd: tmpDir, flags: { full: true, lang: 'zh-TW' } });
+    const projDir = path.join(tmpDir, 'project');
+    for (const f of fs.readdirSync(projDir)) {
+      if (f !== 'index.md' && f.endsWith('.md')) {
+        fs.writeFileSync(
+          path.join(projDir, f),
+          [
+            `# ${f}`,
+            '````markdown',
+            'Here is a nested 3-backtick block with {{UNFILLED_INSIDE_4_BACKTICKS}} and broken.js#L999',
+            '```js',
+            'const x = "{{ALSO_INSIDE_4_BACKTICKS}}";',
+            '```',
+            'Still inside 4-backtick block {{STILL_SAFE}}',
+            '````',
+            '~~~text',
+            'Inside tilde fence {{SAFE_IN_TILDE}} and missing.js#L1-L50',
+            '~~~'
+          ].join('\n'),
+          'utf8'
+        );
+      }
+    }
+    const fenceVerify = runVerify({ cwd: tmpDir, silent: true });
+    assert.equal(fenceVerify.ok, true, JSON.stringify(fenceVerify.issues));
+
+    // 14d. Active rolling snapshot in index.md takes precedence over older superseded meetings
+    const m1 = createMeeting({
+      cwd: tmpDir,
+      project: 'A專案',
+      title: 'M1',
+      date: '2026-11-01',
+      transcriptText: '[00:00:01] **王經理**：上線日定在 12/01。'
+    });
+    fs.appendFileSync(path.join(m1.meetingDir, '02-summary.md'), '\n- **預計上線日**：12/01 ([01-transcript.md](./01-transcript.md#L1-L11))\n', 'utf8');
+    // Official index.md rolling snapshot was already updated to 12/15
+    fs.appendFileSync(path.join(m1.projectDir, 'index.md'), '\n- **預計上線日**：12/15\n', 'utf8');
+
+    const m2 = createMeeting({
+      cwd: tmpDir,
+      project: 'A專案',
+      title: 'M2',
+      date: '2026-11-20',
+      transcriptText: '[00:00:01] **王經理**：我們維持最新決議，上線日為 12/15。'
+    });
+    // Also cite workspace-root-relative path meetings/A專案/index.md#L1-L5
+    fs.appendFileSync(
+      path.join(m2.meetingDir, '02-summary.md'),
+      '\n- **預計上線日**：12/15 (見 [index.md](meetings/A專案/index.md#L1-L5))\n',
+      'utf8'
+    );
+    const m2Inspect = inspectMeetingDirectory(m2.meetingDir);
+    assert.equal(m2Inspect.structureOk, true, JSON.stringify(m2Inspect.verifyIssues));
+    assert.equal(m2Inspect.conflicts.length, 0, JSON.stringify(m2Inspect.conflicts));
+
+    // 14e. runCommit must return ok: false (reason: 'commit_failed') when pre-commit hook fails
+    const hookPath = path.join(tmpDir, '.git', 'hooks', 'pre-commit');
+    fs.writeFileSync(hookPath, '#!/usr/bin/env bash\necho "Hook failed intentionally" >&2\nexit 1\n', { mode: 0o755 });
+    fs.appendFileSync(path.join(projDir, '01-spec.md'), '\nNew change to commit.\n', 'utf8');
+    const failedCommit = runCommit({ cwd: tmpDir, flags: { m: 'should fail hook' } });
+    assert.equal(failedCommit.ok, false);
+    assert.equal(failedCommit.reason, 'commit_failed');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

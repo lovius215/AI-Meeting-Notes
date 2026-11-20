@@ -75,6 +75,8 @@ function markdownToHtmlBody(md) {
   const lines = md.split(/\r?\n/);
   const html = [];
   let inCodeBlock = false;
+  let fenceChar = '';
+  let fenceLen = 0;
   let codeBuffer = [];
   const listStack = []; // Array of { type: 'ul' | 'ol', indent: number }
   let inTable = false;
@@ -99,17 +101,24 @@ function markdownToHtmlBody(md) {
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i];
 
-    // Fenced code blocks
-    if (/^\s*```/.test(raw)) {
-      closeOpenBlocks();
+    // Fenced code blocks (supports ``` and ~~~ and 4-backtick outer blocks)
+    const fenceMatch = raw.match(/^\s*(`{3,}|~{3,})/);
+    if (fenceMatch) {
+      const matchedFence = fenceMatch[1];
       if (!inCodeBlock) {
+        closeOpenBlocks();
         inCodeBlock = true;
+        fenceChar = matchedFence[0];
+        fenceLen = matchedFence.length;
         codeBuffer = [];
-      } else {
+        continue;
+      } else if (matchedFence[0] === fenceChar && matchedFence.length >= fenceLen && /^\s*(`{3,}|~{3,})\s*$/.test(raw)) {
         inCodeBlock = false;
+        fenceChar = '';
+        fenceLen = 0;
         html.push(`<pre><code>${escapeHtml(codeBuffer.join('\n'))}</code></pre>`);
+        continue;
       }
-      continue;
     }
 
     if (inCodeBlock) {
