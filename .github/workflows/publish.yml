@@ -1,0 +1,68 @@
+name: Publish to npm
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      otp:
+        description: 'Optional 6-digit npm 2FA OTP code (not needed if using an Automation token or Granular token with Bypass 2FA)'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: Verify, Test & Publish Package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Validate NPM_TOKEN & Configure ~/.npmrc
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "${NPM_TOKEN}" ]; then
+            echo "::error::NPM_TOKEN secret is not configured in repository settings."
+            exit 1
+          fi
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
+
+      - name: Install dependencies (npm ci)
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: Run integrity check (npm run check)
+        run: npm run check
+
+      - name: Run automated tests (npm test)
+        run: npm test
+
+      - name: Verify templates/gitignore.template in npm pack
+        run: |
+          npm pack --dry-run 2>&1 | grep "templates/gitignore.template"
+
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_OTP: ${{ inputs.otp }}
+        run: |
+          if [ -n "${NPM_OTP}" ]; then
+            npm publish --access public --otp="${NPM_OTP}"
+          else
+            npm publish --access public
+          fi

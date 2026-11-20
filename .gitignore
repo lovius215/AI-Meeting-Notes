@@ -1,0 +1,48 @@
+# Node & Package Managers
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS & Editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+*.swo
+
+# Sensitive & Environment files (Never commit!)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+.npmrc
+credentials.json
+secrets.json
+secrets.yaml
+secrets.yml
+
+# Temporary & Build Artifacts
+tmp/
+.tmp/
+coverage/
+*.log
+
+# Large Meeting Multimedia Files (Kept 100% locally in meetings/<Project>/<Date>/media/, excluded from Git unless using Git LFS)
+meetings/**/media/*.mp3
+meetings/**/media/*.m4a
+meetings/**/media/*.wav
+meetings/**/media/*.flac
+meetings/**/media/*.ogg
+meetings/**/media/*.mp4
+meetings/**/media/*.mov
+meetings/**/media/*.mkv
+meetings/**/media/*.avi
+meetings/**/media/*.webm
+

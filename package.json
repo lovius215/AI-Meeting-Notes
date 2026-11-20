@@ -1,0 +1,51 @@
+{
+  "name": "@loviusc/ai-meeting-notes",
+  "version": "1.1.0",
+  "description": "Zero-Dependency Conversational AI Agent Workbench (@loviusc/ai-meeting-notes) — Install via npm, initialize via 'meetnotes init', and chat in natural language with zero commands!",
+  "keywords": [
+    "ai-agent",
+    "cli",
+    "workbench",
+    "zero-dependency",
+    "scaffold",
+    "skill",
+    "claude",
+    "gemini",
+    "cursor",
+    "antigravity"
+  ],
+  "homepage": "https://github.com/loviusc/ai-meeting-notes#readme",
+  "bugs": {
+    "url": "https://github.com/loviusc/ai-meeting-notes/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/loviusc/ai-meeting-notes.git"
+  },
+  "license": "MIT",
+  "author": "loviusc",
+  "type": "commonjs",
+  "bin": {
+    "meetnotes": "./bin/cli.js"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "templates/",
+    "scripts/",
+    "readme.md",
+    "README.zh-TW.md",
+    "README.zh-CN.md",
+    "README.en.md",
+    "README.ja.md",
+    "README.ko.md"
+  ],
+  "scripts": {
+    "start": "node ./bin/cli.js",
+    "check": "node ./bin/cli.js check --self",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

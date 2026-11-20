@@ -1,0 +1,182 @@
+'use strict';
+
+const fs = require('node:fs');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+const {
+  CONFIG_FILENAME,
+  HIDDEN_DIR,
+  DEFAULT_LANG,
+  SUPPORTED_LANGS,
+  DEFAULT_MODE,
+  TOOL_MODES,
+  SENSITIVE_PATTERNS
+} = require('./config');
+
+function ensureDir(dirPath) {
+  if (!fs.existsSync(dirPath)) {
+    fs.mkdirSync(dirPath, { recursive: true });
+  }
+}
+
+function readConfig(cwd = process.cwd()) {
+  const cfgPath = path.join(cwd, CONFIG_FILENAME);
+  if (fs.existsSync(cfgPath)) {
+    try {
+      const data = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+      return {
+        lang: SUPPORTED_LANGS.includes(data.lang) ? data.lang : DEFAULT_LANG,
+        mode: TOOL_MODES.includes(data.mode) ? data.mode : DEFAULT_MODE,
+        full: Boolean(data.full),
+        ...data
+      };
+    } catch (_) {
+      // Fallback to detection below
+    }
+  }
+
+  // Fallback: detect locked language from .<cli>/AGENTS.md or legacy AGENTS.md
+  const hiddenAgentsPath = path.join(cwd, HIDDEN_DIR, 'AGENTS.md');
+  const legacyAgentsPath = path.join(cwd, 'AGENTS.md');
+  const agentsPath = fs.existsSync(hiddenAgentsPath) ? hiddenAgentsPath : legacyAgentsPath;
+  if (fs.existsSync(agentsPath)) {
+    const content = fs.readFileSync(agentsPath, 'utf8');
+    const langMatch = content.match(/Locked Language[^`]*`(zh-TW|zh-CN|en|ja|ko)`/i)
+      || content.match(/鎖定語言[^`]*`(zh-TW|zh-CN|en|ja|ko)`/)
+      || content.match(/锁定语言[^`]*`(zh-TW|zh-CN|en|ja|ko)`/)
+      || content.match(/固定言語[^`]*`(zh-TW|zh-CN|en|ja|ko)`/)
+      || content.match(/고정 언어[^`]*`(zh-TW|zh-CN|en|ja|ko)`/);
+    const modeMatch = content.match(/Mode[^`]*`(conversational|workbench|cli)`/i);
+    return {
+      lang: langMatch ? langMatch[1] : DEFAULT_LANG,
+      mode: modeMatch ? modeMatch[1] : DEFAULT_MODE,
+      full: fs.existsSync(path.join(cwd, HIDDEN_DIR, 'rules')) || fs.existsSync(path.join(cwd, 'rules'))
+    };
+  }
+
+  return {
+    lang: DEFAULT_LANG,
+    mode: DEFAULT_MODE,
+    full: false
+  };
+}
+
+function writeConfig(cwd, configData, configFilename = CONFIG_FILENAME) {
+  const cfgPath = path.join(cwd, configFilename);
+  let existing = {};
+  if (fs.existsSync(cfgPath)) {
+    try {
+      existing = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+    } catch (_) {
+      existing = {};
+    }
+  }
+  const merged = {
+    ...existing,
+    ...configData,
+    updatedAt: new Date().toISOString()
+  };
+  fs.writeFileSync(cfgPath, JSON.stringify(merged, null, 2) + '\n', 'utf8');
+  return merged;
+}
+
+function extractClaudeMemContext(content) {
+  if (!content) return null;
+  const match = content.match(/<claude-mem-context>[\s\S]*?<\/claude-mem-context>/);
+  return match ? match[0] : null;
+}
+
+function runGit(args, cwd = process.cwd()) {
+  const res = spawnSync('git', args, {
+    cwd,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  return {
+    ok: res.status === 0,
+    status: res.status,
+    stdout: (res.stdout || '').replace(/\r?\n$/, ''),
+    stderr: (res.stderr || '').replace(/\r?\n$/, '')
+  };
+}
+
+function isSensitiveFile(filePath) {
+  const base = path.basename(filePath);
+  return SENSITIVE_PATTERNS.some((regex) => regex.test(base));
+}
+
+const BOOLEAN_FLAGS = new Set([
+  'full',
+  'force',
+  'merge',
+  'html',
+  'npm',
+  'git',
+  'pdf',
+  'dry-run',
+  'dryRun',
+  'self',
+  'pack',
+  'tarball',
+  'skip-verify',
+  'no-git',
+  'no-pdf',
+  'no-html',
+  'no-npm',
+  'hide-skills',
+  'no-hide-skills',
+  'yes',
+  'y',
+  'non-interactive',
+  'version',
+  'v',
+  'help',
+  'h'
+]);
+
+function parseCliArgs(argv) {
+  const positional = [];
+  const flags = {};
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg.startsWith('--')) {
+      const eqIdx = arg.indexOf('=');
+      if (eqIdx !== -1) {
+        const key = arg.slice(2, eqIdx);
+        const val = arg.slice(eqIdx + 1);
+        flags[key] = val;
+      } else {
+        const key = arg.slice(2);
+        const next = argv[i + 1];
+        if (!BOOLEAN_FLAGS.has(key) && next && !next.startsWith('-')) {
+          flags[key] = next;
+          i++;
+        } else {
+          flags[key] = true;
+        }
+      }
+    } else if (arg.startsWith('-') && arg.length > 1) {
+      const key = arg.slice(1);
+      const next = argv[i + 1];
+      if (!BOOLEAN_FLAGS.has(key) && next && !next.startsWith('-')) {
+        flags[key] = next;
+        i++;
+      } else {
+        flags[key] = true;
+      }
+    } else {
+      positional.push(arg);
+    }
+  }
+  return { positional, flags };
+}
+
+module.exports = {
+  ensureDir,
+  readConfig,
+  writeConfig,
+  extractClaudeMemContext,
+  runGit,
+  isSensitiveFile,
+  parseCliArgs
+};
