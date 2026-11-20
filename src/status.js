@@ -67,13 +67,16 @@ function runStatus({ cwd = process.cwd(), subcommand = 'status', flags = {} } = 
 
   const hasAgents = fs.existsSync(path.join(cwd, HIDDEN_DIR, 'AGENTS.md')) || fs.existsSync(path.join(cwd, 'AGENTS.md'));
   const hasSkills = fs.existsSync(path.join(cwd, HIDDEN_DIR, 'skills')) || fs.existsSync(path.join(cwd, 'skills'));
-  const requiredWorkspaceItems = [
-    '.gitignore',
-    'project',
-    'project/index.md'
-  ];
+  const hasMeetingsDir = fs.existsSync(path.join(cwd, 'meetings'));
+  const hasProjectDir = fs.existsSync(path.join(cwd, 'project')) && fs.existsSync(path.join(cwd, 'project', 'index.md'));
 
-  const missing = requiredWorkspaceItems.filter((item) => !fs.existsSync(path.join(cwd, item)));
+  const missing = [];
+  if (!fs.existsSync(path.join(cwd, '.gitignore'))) {
+    missing.push('.gitignore');
+  }
+  if (!hasMeetingsDir && !hasProjectDir) {
+    missing.push('meetings/ or project/index.md');
+  }
   if (!hasAgents) {
     missing.push(`${HIDDEN_DIR}/AGENTS.md`);
   }

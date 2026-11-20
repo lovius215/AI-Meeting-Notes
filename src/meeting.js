@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { ensureDir } = require('./utils');
+const { verifyFile } = require('./verify');
 
 /**
  * Compute SHA-256 checksum and file size of a media file using 64 KiB streaming chunks
@@ -92,11 +93,11 @@ function applySpeakerMapping({ transcriptText = '', mapping = {}, terms = {} } =
       }
     }
 
-    // Replace mapped speakers (e.g. SPEAKER_00 -> 王經理 (PM))
+    // Replace mapped speakers (supports both ASCII SPEAKER_00 and Unicode/CJK labels like 語者A / 發言人1)
     for (const [speakerId, realName] of Object.entries(mapping)) {
       if (speakerId && realName) {
         const escaped = speakerId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const regex = new RegExp(`\\b${escaped}\\b`, 'g');
+        const regex = new RegExp(`(?<![A-Za-z0-9_])${escaped}(?![A-Za-z0-9_])`, 'g');
         line = line.replace(regex, `**${realName}**`);
       }
     }
@@ -519,14 +520,18 @@ function extractKeyFacts(mdContent, sourceLabel) {
       }
     }
 
-    // 2. Natural-language prose: 上線日 / Launch Date (e.g. "上線日改為 12/15", "預計上線日定在 2026-12-01")
-    const launchMatch = rawLine.match(/(?:預計)?上線日(?:期)?(?:鎖定在|鎖定為|定在|定為|改為|延後到|延後至|延至|調整至|調整為|為|是|[:：]\s*)\s*([0-9]{4}[-/][0-9]{1,2}[-/][0-9]{1,2}|[0-9]{1,2}\/[0-9]{1,2}|[0-9]{1,2}月[0-9]{1,2}日)/);
+    // 2. Natural-language prose: 上線日 / 上线日 / Launch Date (zh-TW, zh-CN, en)
+    const launchMatch =
+      rawLine.match(/(?:預計|预计)?(?:上線日|上线日)(?:期)?(?:鎖定在|锁定在|鎖定為|锁定为|定在|定為|定为|改為|改为|延後到|延后到|延後至|延后至|延至|調整至|调整至|調整為|调整为|為|为|是|[:：]\s*)\s*([0-9]{4}[-/][0-9]{1,2}[-/][0-9]{1,2}|[0-9]{1,2}\/[0-9]{1,2}|[0-9]{1,2}月[0-9]{1,2}日)/) ||
+      rawLine.match(/launch\s+date(?:\s+is|\s+was)?(?:\s+set\s+to|\s+locked\s+at|\s+changed\s+to|\s+moved\s+to|\s+delayed\s+to|[:：]\s*)\s*([0-9]{4}[-/][0-9]{1,2}[-/][0-9]{1,2}|[0-9]{1,2}\/[0-9]{1,2}|[A-Za-z]+\s+\d{1,2})/i);
     if (launchMatch) {
       facts['預計上線日'] = { value: launchMatch[1].trim(), line: lineNum, source: sourceLabel };
     }
 
-    // 3. Natural-language prose: 預算 / Budget (e.g. "預算改為 60 萬", "預算定在 50 萬")
-    const budgetMatch = rawLine.match(/預算(?:金額|上限)?(?:鎖定在|鎖定為|定在|定為|改為|調整為|調整至|增加到|提高到|降為|為|是|[:：]\s*)\s*([0-9.,]+\s*(?:萬|億|元|k|K|M|USD|TWD|NTD)?)/);
+    // 3. Natural-language prose: 預算 / 预算 / Budget (zh-TW, zh-CN, en)
+    const budgetMatch =
+      rawLine.match(/(?:預算|预算)(?:金額|金额|上限)?(?:鎖定在|锁定在|鎖定為|锁定为|定在|定為|定为|改為|改为|調整為|调整为|調整至|调整至|增加到|提高到|降為|降为|為|为|是|[:：]\s*)\s*([0-9.,]+\s*(?:萬|万|億|亿|元|k|K|M|USD|TWD|NTD)?)/) ||
+      rawLine.match(/budget(?:\s+is|\s+was)?(?:\s+set\s+to|\s+locked\s+at|\s+changed\s+to|\s+increased\s+to|\s+reduced\s+to|[:：]\s*)\s*(\$?[0-9.,]+\s*(?:k|K|M|USD|TWD)?)/i);
     if (budgetMatch) {
       facts['預算'] = { value: budgetMatch[1].trim(), line: lineNum, source: sourceLabel };
     }
@@ -546,10 +551,12 @@ function inspectMeetingDirectory(meetingDir) {
   const humanInterventionItems = [];
   const conflicts = [];
   const uncitedItems = [];
+  const verifyIssues = [];
 
   for (const fname of requiredFiles) {
     const fpath = path.join(meetingDir, fname);
     if (!fs.existsSync(fpath)) continue;
+    verifyIssues.push(...verifyFile(fpath, meetingDir));
     const content = fs.readFileSync(fpath, 'utf8');
     const lines = content.split(/\r?\n/);
 
@@ -574,12 +581,14 @@ function inspectMeetingDirectory(meetingDir) {
     }
   }
 
-  // Also scan deliverables/*.md for ⚠️ [會議未提及 - 需人工補填]
+  // Also scan deliverables/*.md for ⚠️ [會議未提及 - 需人工補填] and verify their #Lx-Ly citations
   const deliverablesDir = path.join(meetingDir, 'deliverables');
   if (fs.existsSync(deliverablesDir)) {
     for (const df of fs.readdirSync(deliverablesDir)) {
       if (!df.endsWith('.md')) continue;
-      const dLines = fs.readFileSync(path.join(deliverablesDir, df), 'utf8').split(/\r?\n/);
+      const dfPath = path.join(deliverablesDir, df);
+      verifyIssues.push(...verifyFile(dfPath, meetingDir));
+      const dLines = fs.readFileSync(dfPath, 'utf8').split(/\r?\n/);
       for (let i = 0; i < dLines.length; i++) {
         if (/⚠️\s*\[(需人為確認|待確認語者|會議未提及)[^\]]*\]/.test(dLines[i])) {
           humanInterventionItems.push({
@@ -631,7 +640,7 @@ function inspectMeetingDirectory(meetingDir) {
     }
   }
 
-  const structureOk = missingFiles.length === 0 && uncitedItems.length === 0;
+  const structureOk = missingFiles.length === 0 && uncitedItems.length === 0 && verifyIssues.length === 0;
   const needsHumanReview = humanInterventionItems.length > 0 || conflicts.length > 0;
 
   return {
@@ -641,6 +650,7 @@ function inspectMeetingDirectory(meetingDir) {
     meetingDir,
     missingFiles,
     uncitedItems,
+    verifyIssues,
     humanInterventionItems,
     conflicts
   };

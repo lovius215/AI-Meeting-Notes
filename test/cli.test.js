@@ -809,3 +809,82 @@ test('12. negative paths & security guardrails: zero-hallucination missing input
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('13. 360-degree deep audit: CJK path #Lx-Ly citations, CJK speaker tags, inspect verifyIssues, rules lang refresh, pure meetings status & English prose conflicts', () => {
+  const tmpDir = makeTempDir('meetnotes-audit360-');
+  try {
+    runInit({ cwd: tmpDir, flags: { full: true, lang: 'ja', 'no-git': true } });
+    // Switching lang with --full refreshes .meetnotes/rules/language-purity.md as well
+    runInit({ cwd: tmpDir, flags: { full: true, lang: 'en', 'no-git': true } });
+    const ruleText = fs.readFileSync(path.join(tmpDir, HIDDEN_DIR, 'rules', 'language-purity.md'), 'utf8');
+    assert.match(ruleText, /Locked Language\*\*: `en`/);
+
+    // Pure meetings/ workspace (without project/) passes runStatus check
+    fs.rmSync(path.join(tmpDir, 'project'), { recursive: true, force: true });
+    const statusRes = runStatus({ cwd: tmpDir });
+    assert.equal(statusRes.ok, true);
+
+    // Non-ASCII / CJK speaker IDs in applySpeakerMapping (e.g. 語者A, 發言人1)
+    const cjkMap = applySpeakerMapping({
+      transcriptText: '[00:00:10] 語者A：這段是由中文代號標示。\n[00:00:20] 發言人1：收到！',
+      mapping: { '語者A': '王經理', '發言人1': '李工程師' }
+    });
+    assert.equal(cjkMap.lines[0], '[00:00:10] **王經理**：這段是由中文代號標示。');
+    assert.equal(cjkMap.lines[1], '[00:00:20] **李工程師**：收到！');
+
+    // CJK folder names in cross-meeting #Lx-Ly references + English prose conflict detection
+    const m1 = createMeeting({
+      cwd: tmpDir,
+      project: 'A專案',
+      title: '第一次週會',
+      date: '2026-11-13',
+      transcriptText: '[00:01:00] **Alice**: The launch date was set to 2026-12-01 and the budget is set to $50k.'
+    });
+    assert.equal(m1.ok, true);
+    fs.appendFileSync(
+      path.join(m1.meetingDir, '02-summary.md'),
+      '\n- The launch date was set to 2026-12-01 and the budget is set to $50k ([01-transcript.md](./01-transcript.md#L1-L11)).\n',
+      'utf8'
+    );
+
+    const m2 = createMeeting({
+      cwd: tmpDir,
+      project: 'A專案',
+      title: '第二次週會',
+      date: '2026-11-20',
+      transcriptText: '[00:02:00] **Alice**: The launch date was delayed to 2026-12-15 and the budget was increased to $60k.'
+    });
+    assert.equal(m2.ok, true);
+    // Valid cross-meeting CJK folder path reference ../2026-11-13_第一次週會/02-summary.md#L1-L8
+    fs.appendFileSync(
+      path.join(m2.meetingDir, '02-summary.md'),
+      '\n- The launch date was delayed to 2026-12-15 and the budget was increased to $60k (see [前次會議](../2026-11-13_第一次週會/02-summary.md#L1-L8)).\n',
+      'utf8'
+    );
+
+    const verifyValidCjk = runVerify({ cwd: tmpDir, target: 'meetings', silent: true });
+    assert.equal(verifyValidCjk.ok, true, JSON.stringify(verifyValidCjk.issues));
+
+    // English prose conflict check in inspectMeetingDirectory
+    const enConflictInspect = inspectMeetingDirectory(m2.meetingDir);
+    assert.equal(enConflictInspect.structureOk, true);
+    assert.equal(enConflictInspect.conflicts.some((c) => c.key === '預計上線日' && c.currentValue === '2026-12-15'), true);
+    assert.equal(enConflictInspect.conflicts.some((c) => c.key === '預算' && c.currentValue === '$60k'), true);
+
+    // Out-of-bounds CJK path reference ../2026-11-13_第一次週會/02-summary.md#L1-L999 must be caught by both verify and inspect!
+    fs.appendFileSync(
+      path.join(m2.meetingDir, '02-summary.md'),
+      '\n- Broken CJK ref: [前次會議](../2026-11-13_第一次週會/02-summary.md#L1-L999)\n',
+      'utf8'
+    );
+    const verifyBrokenCjk = runVerify({ cwd: tmpDir, target: 'meetings', silent: true });
+    assert.equal(verifyBrokenCjk.ok, false);
+    assert.equal(verifyBrokenCjk.issues.some((i) => i.type === 'broken_lines'), true);
+
+    const brokenInspect = inspectMeetingDirectory(m2.meetingDir);
+    assert.equal(brokenInspect.structureOk, false);
+    assert.equal(brokenInspect.verifyIssues.some((i) => i.type === 'broken_lines'), true);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

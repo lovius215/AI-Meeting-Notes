@@ -28,11 +28,11 @@ function sanitizeLinkUrl(rawUrl) {
 }
 
 function formatInlineMarkdown(text) {
-  // 1. Extract inline code spans first so *, **, or [...] inside `code` are NEVER mutated!
+  // 1. Extract inline code spans (supporting single or multiple backticks) first so *, **, or [...] inside `code` are NEVER mutated!
   const codeTokens = [];
-  const withCodePlaceholders = String(text).replace(/`([^`]+)`/g, (_, codeInner) => {
+  const withCodePlaceholders = String(text).replace(/(`+)([\s\S]*?)\1/g, (_, ticks, codeInner) => {
     const idx = codeTokens.length;
-    codeTokens.push(`<code>${escapeHtml(codeInner)}</code>`);
+    codeTokens.push(`<code>${escapeHtml(codeInner.trim() || codeInner)}</code>`);
     return `\x00CODE_${idx}\x00`;
   });
 

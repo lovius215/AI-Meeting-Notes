@@ -82,12 +82,19 @@ const DICT = {
   • HTML 报告导出：${features.html ? '✅ 已启用' : '⏸️ 未启用（--no-html）'}（${CLI_NAME} pdf --html）
   • npm 套件发布结构：${features.npm ? `✅ 已启用（skills/rules ${features.hideSkillsRules ? '隐藏于 .' + CLI_NAME + '/ [OpenSpec 做法]' : '显示于根目录'}）` : '⏸️ 未启用（仅本地工作区，--no-npm）'}
 
-🤖 建议开发流程（请在 AI 对话窗口操作）：
+🤖 ${mode === 'conversational'
+      ? `建议会议整理流程（免指令纯自然语言对话 / meetings/ 目录已就绪）：
+  1. 直接在 AI 对话窗口拖入录音 (.mp3/.m4a)、录像 (.mp4) 或文字（或执行 ${CLI_NAME} new-meeting <项目> <主题>）
+  2. AI 自动建立 meetings/<项目>/<YYYY-MM-DD_主题>/ 并产出 01-transcript.md、02-summary.md、03-todos-and-discussion.md
+  3. 自动执行完稿检核 Rule（回报 🟢/🟡/🔴 风险、🚨 需人为介入确认清单与 ⚡ 跨期会议冲突提醒）
+  4. 会后可随时针对会议延伸讨论，或套用 meetings/<项目>/templates/ 范本产出衍生文档至 deliverables/
+  5. 验证与导出：${CLI_NAME} verify meetings / ${CLI_NAME} inspect <会议目录> / ${CLI_NAME} pdf meetings --merge`
+      : `建议开发流程（请在 AI 对话窗口操作）：
   1. 先打开 project/01-spec.md、02-workflow.md（或 project/index.md）把您的需求与流程填入
   2. 输入 tool:propose (gtp) -> 请 AI 审查检查需求并给予补充想法
   3. 输入 tool:analyze  (gta) -> 起草完整规格与规则
   4. ${features.npm ? '输入 tool:scaffold (gts) -> 原地组装可发布的 npm 套件，并执行 npm test 测试整个 AI 工具流程！' : '完成规格后即可直接测试整个 AI 工具的对话与产出流程！'}
-  5. 验证与归档：${CLI_NAME} verify / ${CLI_NAME} pdf --merge / ${CLI_NAME} commit`,
+  5. 验证与归档：${CLI_NAME} verify / ${CLI_NAME} pdf --merge / ${CLI_NAME} commit`}`,
     gitInitDone: '✅ 已初始化本地 Git 仓库 (git init)',
     gitAlreadyExists: 'ℹ️ 已检测到现有 Git 仓库',
     verifyStart: '🔍 开始执行 0-Token 防幻觉与完整性检查 (verify)...',
@@ -201,12 +208,19 @@ const DICT = {
   • HTML レポート出力：${features.html ? '✅ 有効' : '⏸️ 無効（--no-html）'}（${CLI_NAME} pdf --html）
   • npm パッケージ化：${features.npm ? `✅ 有効（skills/rules は${features.hideSkillsRules ? ' .' + CLI_NAME + '/ に非表示 [OpenSpec方式]' : 'ルートに配置'}）` : '⏸️ 無効（ローカル専用、--no-npm）'}
 
-🤖 推奨ワークフロー（AI チャット画面で実行）：
+🤖 ${mode === 'conversational'
+      ? `推奨会議整理ワークフロー（コマンド不要の自然言語対話 / meetings/ 準備完了）：
+  1. AI チャット画面に録音 (.mp3/.m4a)・録画 (.mp4)・テキストをドラッグ（または ${CLI_NAME} new-meeting <プロジェクト> <件名>）
+  2. AI が meetings/<プロジェクト>/<YYYY-MM-DD_件名>/ に 01-transcript.md、02-summary.md、03-todos-and-discussion.md を自動生成
+  3. 完稿検核 Rule を自動実行（🟢/🟡/🔴 リスク、🚨 要人間確認リスト、⚡ 過去会議との矛盾アラートを通知）
+  4. 会議後の追加議論や meetings/<プロジェクト>/templates/ からの派生資料生成 (deliverables/) に対応
+  5. 検証と出力：${CLI_NAME} verify meetings / ${CLI_NAME} inspect <会議フォルダ> / ${CLI_NAME} pdf meetings --merge`
+      : `推奨ワークフロー（AI チャット画面で実行）：
   1. project/01-spec.md、02-workflow.md（または project/index.md）に要件とフローを記入
   2. tool:propose (gtp) -> AI が要件をレビューして改善案・アイデアを提案
   3. tool:analyze (gta) -> 完全な仕様とルールを起草
   4. ${features.npm ? 'tool:scaffold (gts) -> 現在のディレクトリに npm パッケージをビルドし、npm test で全体をテスト！' : 'AI ツールの対話・出力フロー全体をそのままテスト！'}
-  5. 検証とアーカイブ：${CLI_NAME} verify / ${CLI_NAME} pdf --merge / ${CLI_NAME} commit`,
+  5. 検証とアーカイブ：${CLI_NAME} verify / ${CLI_NAME} pdf --merge / ${CLI_NAME} commit`}`,
     gitInitDone: '✅ ローカル Git リポジトリを初期化しました (git init)',
     gitAlreadyExists: 'ℹ️ 既存の Git リポジトリを検出しました',
     verifyStart: '🔍 0-Token ハルシネーション防止・整合性チェック (verify) を開始します...',
@@ -257,12 +271,19 @@ const DICT = {
   • HTML 보고서 내보내기: ${features.html ? '✅ 활성화됨' : '⏸️ 비활성화됨 (--no-html)'} (${CLI_NAME} pdf --html)
   • npm 패키지 배포 구조: ${features.npm ? `✅ 활성화됨 (skills/rules ${features.hideSkillsRules ? '.' + CLI_NAME + '/ 에 숨김 [OpenSpec 방식]' : '루트에 표시'})` : '⏸️ 비활성화됨 (로컬 전용, --no-npm)'}
 
-🤖 권장 개발 워크플로우 (AI 대화창에서 진행):
+🤖 ${mode === 'conversational'
+      ? `권장 회의 정리 워크플로우 (명령어 없는 자연어 대화 / meetings/ 폴더 준비 완료):
+  1. AI 대화창에 녹음(.mp3/.m4a), 녹화(.mp4) 또는 텍스트를 드래그 (또는 ${CLI_NAME} new-meeting <프로젝트> <주제> 실행)
+  2. AI가 meetings/<프로젝트>/<YYYY-MM-DD_주제>/ 에 01-transcript.md, 02-summary.md, 03-todos-and-discussion.md 자동 생성
+  3. 완료 검수 Rule 자동 실행 (🟢/🟡/🔴 리스크, 🚨 인간 확인 필요 목록, ⚡ 이전 회의 충돌 알림 보고)
+  4. 회의 후 추가 토론 및 meetings/<프로젝트>/templates/ 템플릿 기반 파생 문서(deliverables/) 생성
+  5. 검증 및 내보내기: ${CLI_NAME} verify meetings / ${CLI_NAME} inspect <회의폴더> / ${CLI_NAME} pdf meetings --merge`
+      : `권장 개발 워크플로우 (AI 대화창에서 진행):
   1. project/01-spec.md, 02-workflow.md (또는 project/index.md)에 요구사항과 흐름을 입력
   2. tool:propose (gtp) -> AI가 요구사항을 검토하고 보완 아이디어를 제안
   3. tool:analyze (gta) -> 전체 명세 및 규칙 초안 작성
   4. ${features.npm ? 'tool:scaffold (gts) -> 현재 디렉터리에 npm 패키지를 조립하고 npm test로 전체 흐름 테스트!' : '완성된 AI 도구 대화 및 산출물 전체 흐름 테스트!'}
-  5. 검증 및 아카이브: ${CLI_NAME} verify / ${CLI_NAME} pdf --merge / ${CLI_NAME} commit`,
+  5. 검증 및 아카이브: ${CLI_NAME} verify / ${CLI_NAME} pdf --merge / ${CLI_NAME} commit`}`,
     gitInitDone: '✅ 로컬 Git 저장소 초기화 완료 (git init)',
     gitAlreadyExists: 'ℹ️ 기존 Git 저장소가 감지되었습니다',
     verifyStart: '🔍 0-Token 환각 방지 및 무결성 검사 (verify) 시작...',

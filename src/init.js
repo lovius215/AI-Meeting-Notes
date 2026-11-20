@@ -155,14 +155,14 @@ function runInit({ cwd = process.cwd(), flags = {} } = {}) {
     }
   }
 
-  // 5. If --full is specified, create .<cli>/rules/*.md (protected unless --force)
+  // 5. If --full is specified, create .<cli>/rules/*.md (protected unless --force or --lang/--mode changed)
   if (isFull) {
     const rulesDir = path.join(cwd, HIDDEN_DIR, 'rules');
     ensureDir(rulesDir);
     const rules = renderRules({ lang, cliName: CLI_NAME });
     for (const [rname, rcontent] of Object.entries(rules)) {
       const rPath = path.join(rulesDir, rname);
-      if (!fs.existsSync(rPath) || flags.force) {
+      if (!fs.existsSync(rPath) || shouldRefreshTemplates) {
         fs.writeFileSync(rPath, rcontent, 'utf8');
       }
     }

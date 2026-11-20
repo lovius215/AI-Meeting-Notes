@@ -114,7 +114,8 @@ function verifyFile(filePath, cwd) {
     // Strip remote HTTP/HTTPS URLs first so GitHub permalinks (https://github.com/.../a.js#L1-L2) never trigger local file errors
     const lineWithoutRemoteUrls = lineWithoutInlineCode.replace(/https?:\/\/[^\s)\]>]+/gi, '');
 
-    const refRegex = /(?:file:\/\/)?([A-Za-z0-9_./\\:-]+?\.[A-Za-z0-9]+)#L(\d+)(?:-L?(\d+))?/g;
+    // Support Unicode/CJK folder and file names (e.g. ../2026-11-13_週會/02-summary.md#L1-L5) while stopping at ASCII & CJK delimiters
+    const refRegex = /(?:file:\/\/)?([^\s()[\]<>'"`#（）：，。；、！？「」『』【】]+?\.[A-Za-z0-9]+)#L(\d+)(?:-L?(\d+))?/g;
     let rMatch;
     while ((rMatch = refRegex.exec(lineWithoutRemoteUrls)) !== null) {
       const fullRef = rMatch[0];
