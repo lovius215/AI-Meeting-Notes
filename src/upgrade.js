@@ -9,13 +9,15 @@ const {
   isToolGeneratedContent,
   readConfig,
   writeConfig,
-  extractClaudeMemContext
+  extractClaudeMemContext,
+  extractCustomTail
 } = require('./utils');
 const {
   renderAgentsMd,
   renderSkillMd,
   renderRules,
   renderProjectIndex,
+  renderMeetingsIndex,
   renderStageFiles,
   renderAllReadmes
 } = require('./templates');
@@ -90,8 +92,8 @@ function runUpgrade({ cwd = process.cwd(), flags = {} } = {}) {
     memContext: existingMem
   });
   let customAppendedSuffix = '';
-  if (existingAgentsRaw && !flags.force && existingAgentsRaw.startsWith(baseAgentsContent) && existingAgentsRaw.length > baseAgentsContent.length) {
-    customAppendedSuffix = existingAgentsRaw.slice(baseAgentsContent.length);
+  if (existingAgentsRaw && !flags.force) {
+    customAppendedSuffix = extractCustomTail(existingAgentsRaw, baseAgentsContent);
   }
   const newAgentsContent = baseAgentsContent + customAppendedSuffix;
   actions.push({ type: 'update', file: `${targetHiddenDir}/AGENTS.md`, preservedMem: Boolean(existingMem) });
@@ -107,8 +109,8 @@ function runUpgrade({ cwd = process.cwd(), flags = {} } = {}) {
   const existingSkillRaw = fs.existsSync(skillPath) ? fs.readFileSync(skillPath, 'utf8') : null;
   const baseSkillContent = renderSkillMd({ lang, mode, cliName: targetCli, pkgName: targetPkg });
   let customSkillSuffix = '';
-  if (existingSkillRaw && !flags.force && existingSkillRaw.startsWith(baseSkillContent) && existingSkillRaw.length > baseSkillContent.length) {
-    customSkillSuffix = existingSkillRaw.slice(baseSkillContent.length);
+  if (existingSkillRaw && !flags.force) {
+    customSkillSuffix = extractCustomTail(existingSkillRaw, baseSkillContent);
   }
   actions.push({ type: 'update', file: skillRel });
   if (!isDryRun) {
@@ -197,25 +199,41 @@ function runUpgrade({ cwd = process.cwd(), flags = {} } = {}) {
     }
   }
 
-  // 4. Backfill missing files in project/ (Non-destructive: NEVER overwrite existing project files!)
-  const projDir = path.join(cwd, 'project');
-  if (!isDryRun) ensureDir(projDir);
-
-  const indexPath = path.join(projDir, 'index.md');
-  if (!fs.existsSync(indexPath)) {
-    actions.push({ type: 'backfill', file: 'project/index.md' });
+  // 4. Backfill meetings/index.md (in conversational mode) or missing files in project/ (only when project/ is used)
+  const meetingsDir = path.join(cwd, 'meetings');
+  if (!isDryRun) ensureDir(meetingsDir);
+  const meetingsIndexPath = path.join(meetingsDir, 'index.md');
+  if (!fs.existsSync(meetingsIndexPath)) {
+    actions.push({ type: 'backfill', file: 'meetings/index.md' });
     if (!isDryRun) {
-      fs.writeFileSync(indexPath, renderProjectIndex({ lang, mode, cliName: CLI_NAME }), 'utf8');
+      fs.writeFileSync(
+        meetingsIndexPath,
+        renderMeetingsIndex({ lang, cliName: targetCli, pkgName: targetPkg }),
+        'utf8'
+      );
     }
   }
 
-  const stageTemplates = renderStageFiles({ lang, mode });
-  for (const [fname, content] of Object.entries(stageTemplates)) {
-    const fpath = path.join(projDir, fname);
-    if (!fs.existsSync(fpath)) {
-      actions.push({ type: 'backfill', file: `project/${fname}` });
+  const projDir = path.join(cwd, 'project');
+  if (mode !== 'conversational' || fs.existsSync(projDir)) {
+    if (!isDryRun) ensureDir(projDir);
+
+    const indexPath = path.join(projDir, 'index.md');
+    if (!fs.existsSync(indexPath)) {
+      actions.push({ type: 'backfill', file: 'project/index.md' });
       if (!isDryRun) {
-        fs.writeFileSync(fpath, content, 'utf8');
+        fs.writeFileSync(indexPath, renderProjectIndex({ lang, mode, cliName: CLI_NAME }), 'utf8');
+      }
+    }
+
+    const stageTemplates = renderStageFiles({ lang, mode });
+    for (const [fname, content] of Object.entries(stageTemplates)) {
+      const fpath = path.join(projDir, fname);
+      if (!fs.existsSync(fpath)) {
+        actions.push({ type: 'backfill', file: `project/${fname}` });
+        if (!isDryRun) {
+          fs.writeFileSync(fpath, content, 'utf8');
+        }
       }
     }
   }

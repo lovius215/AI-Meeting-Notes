@@ -118,6 +118,9 @@ my-meetings-workspace/
 | `meetnotes pdf [目标] [--merge] [--html] [--output <file>]` | 0-Token 将会议记录或规格合并导出为高品质 A4 PDF 或 HTML |
 | `meetnotes commit [目标] [-m <消息>]` | 先跑 `verify` -> 安全 Git 归档（自动排除敏感档与影音大档，遇冲突安全停止） |
 | `meetnotes status` / `check` / `doctor` | 查看进度统计、核心文件检查与环境完整性诊断 |
+| `meetnotes new-meeting <专案> <主题> --transcript <file> [--media <file>]` | 确定性建立会议目录、计算媒体 `SHA-256` 并执行 0-Token 语者批次替换 |
+| `meetnotes inspect <会议目录>` | 执行完稿强制检核 Rule（若含未确认 `🚨` 或跨期冲突 `⚡` 则回传非 0 状态码提醒人工裁示） |
+| `meetnotes deliverable --meeting <dir> --template <file> [--out <file>]` | 套用范本产出会后衍生文档至 `deliverables/`，未提及栏位自动标记 `⚠️ [會議未提及 - 需人工補填]` |
 
 ---
 

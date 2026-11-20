@@ -49,24 +49,39 @@ function normalizeTimestamp(tsRaw) {
  * and deterministically apply speaker & terminology mapping without LLM Output Token re-generation.
  */
 function applySpeakerMapping({ transcriptText = '', mapping = {}, terms = {} } = {}) {
-  const rawLines = String(transcriptText).replace(/\r\n/g, '\n').split('\n');
+  const cleanedText = String(transcriptText).replace(/^\uFEFF/, '').replace(/\r\n/g, '\n');
+  const rawLines = cleanedText.split('\n');
   const normalizedLines = [];
   let activeTimestamp = null;
+  let inVttHeader = false;
 
   const tsLineRegex = /^((?:\d{2}:)?\d{2}:\d{2})[.,]\d{3}\s*-->\s*(?:\d{2}:)?\d{2}:\d{2}[.,]\d{3}(?:\s+.*)?$/;
 
   for (let i = 0; i < rawLines.length; i++) {
-    const line = rawLines[i].trim();
+    let line = rawLines[i].trim();
     if (!line) {
       activeTimestamp = null;
+      inVttHeader = false;
       continue;
     }
-    if (line === 'WEBVTT' || /^NOTE(?:\s|$)/.test(line)) {
+    if (/^WEBVTT(?:\s|$|-)/i.test(line)) {
+      inVttHeader = true;
       continue;
     }
-    // Only skip a bare integer line if the next non-empty line is a timestamp (SRT cue sequence number),
-    // so numeric dialogue lines (e.g. "500000" or "2026") are never accidentally stripped!
-    if (/^\d+$/.test(line)) {
+    if (/^(?:NOTE|STYLE|REGION)(?:\s|$)/i.test(line)) {
+      inVttHeader = true;
+      continue;
+    }
+    if (inVttHeader && !tsLineRegex.test(line)) {
+      const nextLine = (rawLines[i + 1] || '').trim();
+      if (!tsLineRegex.test(nextLine)) {
+        continue;
+      }
+      inVttHeader = false;
+    }
+    // Only skip a cue sequence number or cue identifier if we are NOT inside an active cue
+    // and the very next line is a timestamp line (so numeric dialogue like "500000" is never stripped!)
+    if (activeTimestamp === null && !tsLineRegex.test(line)) {
       const nextLine = (rawLines[i + 1] || '').trim();
       if (tsLineRegex.test(nextLine)) {
         continue;
@@ -76,8 +91,17 @@ function applySpeakerMapping({ transcriptText = '', mapping = {}, terms = {} } =
     const tsMatch = line.match(tsLineRegex);
     if (tsMatch) {
       activeTimestamp = normalizeTimestamp(tsMatch[1]);
+      inVttHeader = false;
       continue;
     }
+
+    // Convert WebVTT voice tags `<v SPEAKER_00>text</v>` or `<v.loud SPEAKER_00>text` into `SPEAKER_00: text`
+    line = line
+      .replace(/<v(?:\.[^>\s]+)*\s+([^>]+)>([\s\S]*?)(?:<\/v>|$)/gi, '$1: $2')
+      .replace(/<\/?(?:v|c|b|i|u|ruby|rt)(?:\.[^>\s]+)*>/gi, '')
+      .trim();
+    if (!line) continue;
+
     if (activeTimestamp) {
       if (/^\[\d{2}:\d{2}:\d{2}\]/.test(line)) {
         normalizedLines.push(line);
@@ -107,7 +131,7 @@ function applySpeakerMapping({ transcriptText = '', mapping = {}, terms = {} } =
   const speakerMap = new Map(speakerEntries.map(([k, v]) => [k, String(v)]));
   const speakerRegex = speakerEntries.length > 0
     ? new RegExp(
-        `(?<![A-Za-z0-9_])(?:${speakerEntries.map(([k]) => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})(?![A-Za-z0-9_])`,
+        `(?:\\*\\*)?(?<![A-Za-z0-9_])(${speakerEntries.map(([k]) => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})(?![A-Za-z0-9_])(?:\\*\\*)?`,
         'g'
       )
     : null;
@@ -120,9 +144,9 @@ function applySpeakerMapping({ transcriptText = '', mapping = {}, terms = {} } =
       line = line.replace(termRegex, (matched) => termMap.get(matched) ?? matched);
     }
 
-    // 2. Single-pass speaker replacement (supports both ASCII SPEAKER_00 and Unicode/CJK labels like 語者A / 發言人1)
+    // 2. Single-pass speaker replacement (supports both ASCII SPEAKER_00 and Unicode/CJK labels like 語者A / 發言人1 without double-bolding)
     if (speakerRegex) {
-      line = line.replace(speakerRegex, (matched) => `**${speakerMap.get(matched)}**`);
+      line = line.replace(speakerRegex, (_, rawKey) => `**${speakerMap.get(rawKey)}**`);
     }
 
     // 3. Detect ALL remaining unmapped SPEAKER_XX, Speaker A/B, or CJK 語者X / 發言人X / 話者X / 화자X tokens on the line
@@ -540,10 +564,10 @@ function extractKeyFacts(mdContent, sourceLabel) {
     const rawLine = lines[i];
     const lineNum = i + 1;
 
-    // Skip hypothetical questions, unconfirmed ⚠️ lines, or conditional statements so they don't trigger false decision conflicts
+    // Skip hypothetical questions, unconfirmed ⚠️ lines, or conditional clauses (even mid-sentence like "討論如果...") so they don't trigger false decision conflicts
     if (
       /⚠️|[\?？]\s*$/.test(rawLine) ||
-      /^\s*(?:[-*]\s*)?(?:如果|若|假設|假设|討論是否|讨论是否|未決議|未决议|if\s+|whether\s+)/i.test(rawLine)
+      /(?:如果|假如|假設|假设|討論是否|讨论是否|評估是否|评估是否|尚未決定|尚未决定|未決議|未决议|(?:^|[\s，,：:])若|\bif\b|\bwhether\b|\bwhat\s+if\b|もし|仮に|만약|혹시)/i.test(rawLine)
     ) {
       continue;
     }
@@ -628,7 +652,11 @@ function inspectMeetingDirectory(meetingDir) {
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
-      if (/⚠️\s*\[(需人為確認|待確認語者|會議未提及)[^\]]*\]/.test(line) || /\bSPEAKER_\d+\b/.test(line)) {
+      if (
+        /⚠️\s*\[[^\]]+\]/.test(line) ||
+        /(?<![A-Za-z0-9_])(SPEAKER_\d+|Speaker\s+[A-Z0-9]+|(?:語者|發言人|发言人|話者|화자)\s*[A-Z0-9一二三四五六七八九十甲乙丙丁]+)(?![A-Za-z0-9_])/.test(line) ||
+        /^\s*-\s+🔴/.test(line)
+      ) {
         humanInterventionItems.push({
           file: fname,
           line: i + 1,
@@ -665,7 +693,7 @@ function inspectMeetingDirectory(meetingDir) {
       verifyIssues.push(...verifyFile(dfPath, workspaceRoot));
       const dLines = fs.readFileSync(dfPath, 'utf8').split(/\r?\n/);
       for (let i = 0; i < dLines.length; i++) {
-        if (/⚠️\s*\[(需人為確認|待確認語者|會議未提及)[^\]]*\]/.test(dLines[i])) {
+        if (/⚠️\s*\[[^\]]+\]/.test(dLines[i])) {
           humanInterventionItems.push({
             file: `deliverables/${df}`,
             line: i + 1,

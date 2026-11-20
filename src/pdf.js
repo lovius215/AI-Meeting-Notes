@@ -20,11 +20,25 @@ function escapeHtml(str) {
 
 function sanitizeLinkUrl(rawUrl) {
   const trimmed = String(rawUrl || '').trim();
-  const decoded = trimmed.replace(/&amp;/g, '&');
-  if (/^\s*(?:javascript|vbscript|data):/i.test(decoded)) {
+  const decoded = trimmed
+    .replace(/&amp;/gi, '&')
+    .replace(/&colon;/gi, ':')
+    .replace(/&#(\d+);?/g, (_, dec) => String.fromCharCode(parseInt(dec, 10)))
+    .replace(/&#x([0-9a-f]+);?/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/[\x00-\x20]+/g, '');
+  if (/^(?:javascript|vbscript|data):/i.test(decoded)) {
     return '#';
   }
   return trimmed;
+}
+
+function formatInlineText(escapedText) {
+  let out = escapedText;
+  out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  out = out.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  out = out.replace(/^\[x\]\s+/i, '☑️ ');
+  out = out.replace(/^\[\s\]\s+/, '⬜ ');
+  return out;
 }
 
 function formatInlineMarkdown(text) {
@@ -36,23 +50,24 @@ function formatInlineMarkdown(text) {
     return `\x00CODE_${idx}\x00`;
   });
 
-  let out = escapeHtml(withCodePlaceholders);
+  // 2. Extract Markdown links before running bold/italic so asterisks inside URLs are never mangled
+  const linkTokens = [];
+  const withLinkPlaceholders = withCodePlaceholders.replace(
+    /\[([^\]]+)\]\(([^()\s]+(?:\([^()]*\)[^()\s]*)*)\)/g,
+    (_, rawLabel, rawUrl) => {
+      const idx = linkTokens.length;
+      const safeUrl = escapeHtml(sanitizeLinkUrl(rawUrl));
+      const formattedLabel = formatInlineText(escapeHtml(rawLabel));
+      linkTokens.push(`<a href="${safeUrl}">${formattedLabel}</a>`);
+      return `\x00LINK_${idx}\x00`;
+    }
+  );
 
-  // 2. Bold & Italic (outside inline code)
-  out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  out = out.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  // 3. Format bold, italic, and checkboxes on remaining text
+  let out = formatInlineText(escapeHtml(withLinkPlaceholders));
 
-  // 3. Checkboxes
-  out = out.replace(/^\[x\]\s+/i, '☑️ ');
-  out = out.replace(/^\[\s\]\s+/, '⬜ ');
-
-  // 4. Links (support balanced one-level parentheses in URLs & filter dangerous protocols)
-  out = out.replace(/\[([^\]]+)\]\(([^()\s]+(?:\([^()]*\)[^()\s]*)*)\)/g, (_, label, url) => {
-    const safeUrl = sanitizeLinkUrl(url);
-    return `<a href="${safeUrl}">${label}</a>`;
-  });
-
-  // 5. Restore inline code tokens
+  // 4. Restore link tokens and inline code tokens
+  out = out.replace(/\x00LINK_(\d+)\x00/g, (_, idx) => linkTokens[Number(idx)] || '');
   out = out.replace(/\x00CODE_(\d+)\x00/g, (_, idx) => codeTokens[Number(idx)] || '');
   return out;
 }
@@ -62,7 +77,8 @@ function splitTableCells(rawRow) {
   const protectedRow = rawRow
     .trim()
     .replace(/^\||\|$/g, '')
-    .replace(/\\\|/g, escapedPipePlaceholder);
+    .replace(/\\\|/g, escapedPipePlaceholder)
+    .replace(/(`+)([\s\S]*?)\1/g, (span) => span.replace(/\|/g, escapedPipePlaceholder));
   return protectedRow
     .split('|')
     .map((c) => c.replace(/\x00ESCAPED_PIPE\x00/g, '|').trim());
@@ -416,6 +432,11 @@ function convertHtmlToPdf(htmlPath, pdfPath) {
 }
 
 function runPdf({ cwd = process.cwd(), target = null, flags = {} } = {}) {
+  if (flags.output === true) {
+    const msg = '⛔ Missing argument value for --output.';
+    console.error(msg);
+    return { ok: false, reason: 'invalid_flag', error: msg };
+  }
   const cfg = readConfig(cwd);
   const lang = cfg.lang;
   const htmlOnly = Boolean(flags.html);
@@ -423,6 +444,11 @@ function runPdf({ cwd = process.cwd(), target = null, flags = {} } = {}) {
   if (cfg.features && !flags.force) {
     if (!htmlOnly && cfg.features.pdf === false) {
       const msg = 'PDF export is disabled in workspace config (--no-pdf). Pass --force to override.';
+      console.error(msg);
+      return { ok: false, reason: 'feature_disabled', error: msg };
+    }
+    if (htmlOnly && cfg.features.html === false) {
+      const msg = 'HTML export is disabled in workspace config (--no-html). Pass --force to override.';
       console.error(msg);
       return { ok: false, reason: 'feature_disabled', error: msg };
     }

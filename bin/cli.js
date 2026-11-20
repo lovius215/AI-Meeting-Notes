@@ -141,7 +141,7 @@ function main(argv = process.argv.slice(2)) {
       const date = typeof flags.date === 'string' ? flags.date : new Date().toISOString().slice(0, 10);
       const mapping = {};
       if (typeof flags.map === 'string') {
-        for (const pair of flags.map.split(',')) {
+        for (const pair of flags.map.split(/[,;]/)) {
           const eqIdx = pair.indexOf('=');
           if (eqIdx > 0) {
             const k = pair.slice(0, eqIdx).trim();
@@ -264,12 +264,17 @@ if (require.main === module) {
   const rawArgv = process.argv.slice(2);
   const { positional, flags } = parseCliArgs(rawArgv);
   if (positional[0] === 'init' && !flags.help && !flags.h && !flags.version && !flags.v) {
-    const cfg = readConfig(process.cwd());
-    const lang = flags.lang || cfg.lang;
-    promptInitFeaturesIfTty(flags, lang).then((updatedFlags) => {
-      const res = runInit({ cwd: process.cwd(), flags: updatedFlags });
+    if (flags.lang === true || flags.mode === true) {
+      const res = runInit({ cwd: process.cwd(), flags });
       process.exitCode = res.ok ? 0 : 1;
-    });
+    } else {
+      const cfg = readConfig(process.cwd());
+      const lang = typeof flags.lang === 'string' ? flags.lang : cfg.lang;
+      promptInitFeaturesIfTty(flags, lang).then((updatedFlags) => {
+        const res = runInit({ cwd: process.cwd(), flags: updatedFlags });
+        process.exitCode = res.ok ? 0 : 1;
+      });
+    }
   } else {
     const code = main(rawArgv);
     process.exitCode = code;

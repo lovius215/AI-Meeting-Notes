@@ -148,6 +148,11 @@ function assembleNpmPackage({
 }
 
 function runScaffold({ cwd = process.cwd(), target = null, flags = {} } = {}) {
+  if (flags.name === true || flags.cli === true || flags.out === true || flags.mode === true || flags.lang === true) {
+    const msg = '⛔ Missing argument value for option flag (--name, --cli, --out, --mode, or --lang).';
+    console.error(msg);
+    return { ok: false, reason: 'invalid_flag', error: msg };
+  }
   const wsCfg = readConfig(cwd);
   const lang = SUPPORTED_LANGS.includes(flags.lang) ? flags.lang : wsCfg.lang || DEFAULT_LANG;
 

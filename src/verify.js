@@ -108,8 +108,10 @@ function verifyFile(filePath, cwd) {
 
     if (inCodeBlock) continue;
 
-    // Strip inline code spans (supporting paired N-backtick spans like ``code with ` inside``) so literal examples don't false-trigger
-    const lineWithoutInlineCode = rawLine.replace(/(`+)([\s\S]*?)\1/g, '');
+    // Strip inline code spans (supporting paired N-backtick spans like ``code with ` inside``) and inline HTML comments
+    const lineWithoutInlineCode = rawLine
+      .replace(/(`+)([\s\S]*?)\1/g, '')
+      .replace(/<!--[\s\S]*?-->/g, '');
 
     // 1. Check unfilled placeholders {{...}}
     const placeholderRegex = /\{\{[^{}\r\n]+\}\}/g;
@@ -141,20 +143,27 @@ function verifyFile(filePath, cwd) {
       }
 
       let resolvedRef = null;
+      let decodedRefPathStr = refPathStr;
+      try {
+        decodedRefPathStr = decodeURIComponent(refPathStr);
+      } catch (_) {}
+
       if (fullRef.startsWith('file://')) {
-        resolvedRef = process.platform === 'win32'
+        const rawTarget = process.platform === 'win32'
           ? refPathStr.replace(/^\/([A-Za-z]:)/, '$1')
           : refPathStr;
+        const decodedTarget = process.platform === 'win32'
+          ? decodedRefPathStr.replace(/^\/([A-Za-z]:)/, '$1')
+          : decodedRefPathStr;
+        resolvedRef = fs.existsSync(rawTarget) ? rawTarget : decodedTarget;
       } else {
-        const candidateFromDoc = path.resolve(path.dirname(filePath), refPathStr);
-        const candidateFromCwd = path.resolve(cwd, refPathStr);
-        if (fs.existsSync(candidateFromDoc)) {
-          resolvedRef = candidateFromDoc;
-        } else if (fs.existsSync(candidateFromCwd)) {
-          resolvedRef = candidateFromCwd;
-        } else {
-          resolvedRef = candidateFromDoc;
-        }
+        const candidates = [
+          path.resolve(path.dirname(filePath), refPathStr),
+          path.resolve(path.dirname(filePath), decodedRefPathStr),
+          path.resolve(cwd, refPathStr),
+          path.resolve(cwd, decodedRefPathStr)
+        ];
+        resolvedRef = candidates.find((c) => fs.existsSync(c)) || candidates[0];
       }
 
       if (!fs.existsSync(resolvedRef) || !fs.statSync(resolvedRef).isFile()) {

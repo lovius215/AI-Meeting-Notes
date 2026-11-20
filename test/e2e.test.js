@@ -28,7 +28,7 @@ test('E2E: full real-world CLI lifecycle for genaitool AND generated derived npm
     // =========================================================================
     // PART 1: Developer uses genaitool CLI end-to-end to design & pack a tool
     // =========================================================================
-    const initRes = runCmd(process.execPath, [CLI_ENTRY, 'init', '--full', '--lang', 'zh-TW', '--yes'], authorWorkspace);
+    const initRes = runCmd(process.execPath, [CLI_ENTRY, 'init', '--full', '--lang', 'zh-TW', '--mode', 'workbench', '--yes'], authorWorkspace);
     assert.equal(initRes.status, 0, initRes.stderr || initRes.stdout);
     assert.equal(fs.existsSync(path.join(authorWorkspace, HIDDEN_DIR, 'rules', 'invariants.md')), true);
     assert.equal(fs.existsSync(path.join(authorWorkspace, '.git', 'hooks', 'pre-commit')), true);
@@ -112,13 +112,9 @@ test('E2E: full real-world CLI lifecycle for genaitool AND generated derived npm
     assert.equal(fs.existsSync(path.join(endUserWorkspace, '.e2emate', 'skills', 'e2emate', 'SKILL.md')), true);
     assert.equal(fs.existsSync(path.join(endUserWorkspace, '.e2emate', 'rules', 'invariants.md')), true);
 
-    // End-user fills deliverables and runs verify -> pdf --html -> commit
-    const userProj = path.join(endUserWorkspace, 'project');
-    for (const f of fs.readdirSync(userProj)) {
-      if (f !== 'index.md' && f.endsWith('.md')) {
-        fs.writeFileSync(path.join(userProj, f), `# ${f}\nEnd-user deliverable completed.\n`, 'utf8');
-      }
-    }
+    // End-user runs verify -> pdf --html -> commit immediately out-of-the-box in conversational mode (no project/01-spec.md clutter!)
+    assert.equal(fs.existsSync(path.join(endUserWorkspace, 'project')), false);
+    assert.equal(fs.existsSync(path.join(endUserWorkspace, 'meetings', 'index.md')), true);
     const userVerify = runCmd(process.execPath, [derivedCli, 'verify'], endUserWorkspace);
     assert.equal(userVerify.status, 0, userVerify.stderr || userVerify.stdout);
 

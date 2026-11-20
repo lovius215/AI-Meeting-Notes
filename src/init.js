@@ -13,12 +13,13 @@ const {
   TOOL_MODES
 } = require('./config');
 const { t } = require('./i18n');
-const { ensureDir, readConfig, writeConfig, runGit, extractClaudeMemContext } = require('./utils');
+const { ensureDir, readConfig, writeConfig, runGit, extractClaudeMemContext, extractCustomTail } = require('./utils');
 const {
   renderAgentsMd,
   renderSkillMd,
   renderRules,
   renderProjectIndex,
+  renderMeetingsIndex,
   renderStageFiles,
   renderAllReadmes
 } = require('./templates');
@@ -58,6 +59,12 @@ fi
 }
 
 function runInit({ cwd = process.cwd(), flags = {} } = {}) {
+  if (flags.lang === true || flags.mode === true) {
+    const msg = '⛔ Missing argument value for --lang or --mode.';
+    console.error(msg);
+    return { ok: false, reason: 'invalid_flag', error: msg };
+  }
+
   const hasExistingWorkspace =
     fs.existsSync(path.join(cwd, CONFIG_FILENAME)) ||
     fs.existsSync(path.join(cwd, HIDDEN_DIR, 'AGENTS.md'));
@@ -68,6 +75,12 @@ function runInit({ cwd = process.cwd(), flags = {} } = {}) {
     const msg = t(DEFAULT_LANG, 'invalidLang', lang);
     console.error(msg);
     return { ok: false, error: msg };
+  }
+
+  if (flags.mode && !TOOL_MODES.includes(flags.mode)) {
+    const msg = `Unsupported mode "${flags.mode}". Supported modes: ${TOOL_MODES.join(', ')}`;
+    console.error(msg);
+    return { ok: false, reason: 'invalid_mode', error: msg };
   }
 
   const mode = TOOL_MODES.includes(flags.mode)
@@ -115,9 +128,7 @@ function runInit({ cwd = process.cwd(), flags = {} } = {}) {
         pkgName: PACKAGE_NAME,
         memContext: existingMem
       });
-      if (existingAgentsRaw.startsWith(oldDefault) && existingAgentsRaw.length > oldDefault.length) {
-        customAppendedSuffix = existingAgentsRaw.slice(oldDefault.length);
-      }
+      customAppendedSuffix = extractCustomTail(existingAgentsRaw, oldDefault);
     }
 
     const agentsContent = renderAgentsMd({
@@ -153,9 +164,7 @@ function runInit({ cwd = process.cwd(), flags = {} } = {}) {
         cliName: CLI_NAME,
         pkgName: PACKAGE_NAME
       });
-      if (existingSkillRaw.startsWith(oldDefaultSkill) && existingSkillRaw.length > oldDefaultSkill.length) {
-        customSkillSuffix = existingSkillRaw.slice(oldDefaultSkill.length);
-      }
+      customSkillSuffix = extractCustomTail(existingSkillRaw, oldDefaultSkill);
     }
     fs.writeFileSync(
       skillPath,
@@ -164,27 +173,40 @@ function runInit({ cwd = process.cwd(), flags = {} } = {}) {
     );
   }
 
-  // 4. Create meetings/ directory for periodic project meetings AND project/ directory
-  ensureDir(path.join(cwd, 'meetings'));
-
-  const projDir = path.join(cwd, 'project');
-  ensureDir(projDir);
-  const indexPath = path.join(projDir, 'index.md');
-  if (!fs.existsSync(indexPath) || flags.force) {
-    fs.writeFileSync(indexPath, renderProjectIndex({ lang, mode, cliName: CLI_NAME }), 'utf8');
+  // 4. Create meetings/ directory and placeholder-free meetings/index.md so `verify`, `pdf`, and `status` pass immediately after `init`
+  const meetingsDir = path.join(cwd, 'meetings');
+  ensureDir(meetingsDir);
+  const meetingsIndexPath = path.join(meetingsDir, 'index.md');
+  if (!fs.existsSync(meetingsIndexPath) || shouldRefreshTemplates) {
+    fs.writeFileSync(
+      meetingsIndexPath,
+      renderMeetingsIndex({ lang, cliName: CLI_NAME, pkgName: PACKAGE_NAME }),
+      'utf8'
+    );
   }
 
-  const stages = renderStageFiles({ lang, mode });
-  for (const [fname, content] of Object.entries(stages)) {
-    if (!useNpm && fname === '04-release-plan.md') continue;
-    const fpath = path.join(projDir, fname);
-    if (!fs.existsSync(fpath) || flags.force) {
-      fs.writeFileSync(fpath, content, 'utf8');
+  // Only create tool-scaffolding `project/01-spec.md` ~ `04-release-plan.md` when in `workbench` or `cli` mode (or when `--project` is requested)
+  // so conversational meeting users never get 11 unfilled `{{PACKAGE_NAME}}` errors or `0/4` status!
+  if (mode !== 'conversational' || flags.project) {
+    const projDir = path.join(cwd, 'project');
+    ensureDir(projDir);
+    const indexPath = path.join(projDir, 'index.md');
+    if (!fs.existsSync(indexPath) || flags.force) {
+      fs.writeFileSync(indexPath, renderProjectIndex({ lang, mode, cliName: CLI_NAME }), 'utf8');
+    }
+
+    const stages = renderStageFiles({ lang, mode });
+    for (const [fname, content] of Object.entries(stages)) {
+      if (!useNpm && fname === '04-release-plan.md') continue;
+      const fpath = path.join(projDir, fname);
+      if (!fs.existsSync(fpath) || flags.force) {
+        fs.writeFileSync(fpath, content, 'utf8');
+      }
     }
   }
 
-  // 5. If --full is specified, create .<cli>/rules/*.md (protected unless --force or --lang/--mode changed)
-  if (isFull) {
+  // 5. Create .<cli>/rules/*.md (always installed in conversational mode so post-meeting-inspection.md is present, or when --full is specified)
+  if (isFull || mode === 'conversational') {
     const rulesDir = path.join(cwd, HIDDEN_DIR, 'rules');
     ensureDir(rulesDir);
     const rules = renderRules({ lang, cliName: CLI_NAME });

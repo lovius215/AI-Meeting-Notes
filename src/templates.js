@@ -600,6 +600,67 @@ function renderProjectIndex({ lang = 'zh-TW', mode = 'workbench', cliName = CLI_
   return `${h.title}\n\n${h.meta}\n\n${h.tableHeader}\n${stageRows}\n`;
 }
 
+function renderMeetingsIndex({ lang = 'zh-TW', cliName = CLI_NAME, pkgName = PACKAGE_NAME }) {
+  if (lang === 'zh-CN') {
+    return `# 会议知识库总览 (Meetings Knowledge Base Index)
+
+- **锁定语言 (Locked Language)**: \`zh-CN\`
+- **交互模式 (Interaction Mode)**: \`conversational\`（免指令自然语言对话）
+- **管理工具**: \`${pkgName}\` (\`${cliName}\`)
+
+## 目录架构与使用方式
+- 日常使用**无需输入任何 CLI 指令**：直接将录音（\`.mp3/.m4a/.wav\`）、录像（\`.mp4/.mov/.mkv\`）或文字拖入 AI 对话框，或使用 \`${cliName} new-meeting <项目> <主题> --transcript <file>\`。
+- 每场周期性会议将自动归档于 \`meetings/<项目名称>/<YYYY-MM-DD_会议主题>/\`，包含 \`media/\`、\`01-transcript.md\`、\`02-summary.md\`、\`03-todos-and-discussion.md\` 与 \`deliverables/\`。
+`;
+  }
+  if (lang === 'en') {
+    return `# Meetings Knowledge Base Index
+
+- **Locked Language**: \`en\`
+- **Interaction Mode**: \`conversational\` (Zero-Command Natural Language Chat)
+- **Managed By**: \`${pkgName}\` (\`${cliName}\`)
+
+## Directory Structure & Usage
+- **Zero CLI commands required for daily use**: Drag audio (\`.mp3/.m4a/.wav\`), video (\`.mp4/.mov/.mkv\`), or text notes directly into AI chat, or run \`${cliName} new-meeting <Project> <Title> --transcript <file>\`.
+- Periodic meetings are organized under \`meetings/<Project>/<YYYY-MM-DD_Title>/\` with \`media/\`, \`01-transcript.md\`, \`02-summary.md\`, \`03-todos-and-discussion.md\`, and \`deliverables/\`.
+`;
+  }
+  if (lang === 'ja') {
+    return `# 会議ナレッジベース総覧 (Meetings Knowledge Base Index)
+
+- **固定言語 (Locked Language)**: \`ja\`
+- **対話モード (Interaction Mode)**: \`conversational\`（コマンド不要の自然言語対話）
+- **管理ツール**: \`${pkgName}\` (\`${cliName}\`)
+
+## フォルダ構造と使い方
+- **日常操作は CLI コマンド不要**：録音（\`.mp3/.m4a/.wav\`）・録画（\`.mp4/.mov/.mkv\`）・テキストを AI チャットにドラッグするか、\`${cliName} new-meeting <プロジェクト> <件名> --transcript <file>\` を実行します。
+- 各定例会議は \`meetings/<プロジェクト>/<YYYY-MM-DD_件名>/\` に \`media/\`、\`01-transcript.md\`、\`02-summary.md\`、\`03-todos-and-discussion.md\`、\`deliverables/\` として自動整理されます。
+`;
+  }
+  if (lang === 'ko') {
+    return `# 회의 지식베이스 총람 (Meetings Knowledge Base Index)
+
+- **고정 언어 (Locked Language)**: \`ko\`
+- **인터랙션 모드 (Interaction Mode)**: \`conversational\` (명령어 없는 자연어 대화)
+- **관리 도구**: \`${pkgName}\` (\`${cliName}\`)
+
+## 폴더 구조 및 사용 방법
+- **일상 사용 시 CLI 명령어 불필요**: 녹음(\`.mp3/.m4a/.wav\`), 녹화(\`.mp4/.mov/.mkv\`) 또는 텍스트를 AI 채팅창에 드래그하거나 \`${cliName} new-meeting <프로젝트> <주제> --transcript <file>\`을 실행하세요.
+- 정기 회의는 \`meetings/<프로젝트>/<YYYY-MM-DD_주제>/\` 아래에 \`media/\`, \`01-transcript.md\`, \`02-summary.md\`, \`03-todos-and-discussion.md\`, \`deliverables/\`로 자동 정리됩니다.
+`;
+  }
+  return `# 會議知識庫總覽 (Meetings Knowledge Base Index)
+
+- **鎖定語言 (Locked Language)**: \`zh-TW\`
+- **互動模式 (Interaction Mode)**: \`conversational\`（免指令自然語言對話）
+- **管理工具**: \`${pkgName}\` (\`${cliName}\`)
+
+## 目錄架構與使用方式
+- 日常使用**無需輸入任何 CLI 指令**：直接將錄音（\`.mp3/.m4a/.wav\`）、錄影（\`.mp4/.mov/.mkv\`）或文字拖入 AI 對話框，或使用 \`${cliName} new-meeting <專案> <主題> --transcript <file>\`。
+- 每場週期性會議將自動歸檔於 \`meetings/<專案名稱>/<YYYY-MM-DD_會議主題>/\`，包含 \`media/\`、\`01-transcript.md\`、\`02-summary.md\`、\`03-todos-and-discussion.md\` 與 \`deliverables/\`。
+`;
+}
+
 function renderStageFiles({ lang = 'zh-TW', mode = 'workbench', cliName = CLI_NAME }) {
   if (lang === 'en') {
     return {
@@ -793,6 +854,9 @@ ${isConv
 | \`${cliName} pdf [目标] [--merge] [--html] [--output <file>]\` | 0-Token 将会议记录或规格合并导出为高品质 A4 PDF 或 HTML |
 | \`${cliName} commit [目标] [-m <消息>]\` | 先跑 \`verify\` -> 安全 Git 归档（自动排除敏感档与影音大档，遇冲突安全停止） |
 | \`${cliName} status\` / \`check\` / \`doctor\` | 查看进度统计、核心文件检查与环境完整性诊断 |
+| \`${cliName} new-meeting <专案> <主题> --transcript <file> [--media <file>]\` | 确定性建立会议目录、计算媒体 \`SHA-256\` 并执行 0-Token 语者批次替换 |
+| \`${cliName} inspect <会议目录>\` | 执行完稿强制检核 Rule（若含未确认 \`🚨\` 或跨期冲突 \`⚡\` 则回传非 0 状态码提醒人工裁示） |
+| \`${cliName} deliverable --meeting <dir> --template <file> [--out <file>]\` | 套用范本产出会后衍生文档至 \`deliverables/\`，未提及栏位自动标记 \`⚠️ [會議未提及 - 需人工補填]\` |
 
 ---
 
@@ -1435,6 +1499,7 @@ module.exports = {
   renderSkillMd,
   renderRules,
   renderProjectIndex,
+  renderMeetingsIndex,
   renderStageFiles,
   renderWorkspaceReadme,
   renderAllReadmes

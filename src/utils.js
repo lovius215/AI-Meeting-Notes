@@ -106,6 +106,25 @@ function extractClaudeMemContext(content) {
   return match ? match[0] : null;
 }
 
+function extractCustomTail(existingRaw, renderedDefault) {
+  if (!existingRaw || !renderedDefault) return '';
+  if (existingRaw.startsWith(renderedDefault)) {
+    return existingRaw.slice(renderedDefault.length);
+  }
+  const defaultLines = renderedDefault.trimEnd().split(/\r?\n/);
+  const anchorLine = defaultLines[defaultLines.length - 1];
+  if (anchorLine && anchorLine.length > 5) {
+    const idx = existingRaw.lastIndexOf(anchorLine);
+    if (idx !== -1) {
+      const afterAnchor = existingRaw.slice(idx + anchorLine.length).replace(/^\r?\n/, '\n');
+      if (afterAnchor.trim().length > 0) {
+        return afterAnchor;
+      }
+    }
+  }
+  return '';
+}
+
 function runGit(args, cwd = process.cwd()) {
   const res = spawnSync('git', args, {
     cwd,
@@ -165,12 +184,20 @@ function parseCliArgs(argv) {
       if (eqIdx !== -1) {
         const key = arg.slice(2, eqIdx);
         const val = arg.slice(eqIdx + 1);
-        flags[key] = val;
+        if (key === 'map' && typeof flags[key] === 'string') {
+          flags[key] = `${flags[key]},${val}`;
+        } else {
+          flags[key] = val;
+        }
       } else {
         const key = arg.slice(2);
         const next = argv[i + 1];
         if (!BOOLEAN_FLAGS.has(key) && next && !next.startsWith('-')) {
-          flags[key] = next;
+          if (key === 'map' && typeof flags[key] === 'string') {
+            flags[key] = `${flags[key]},${next}`;
+          } else {
+            flags[key] = next;
+          }
           i++;
         } else {
           flags[key] = true;
@@ -198,6 +225,7 @@ module.exports = {
   readConfig,
   writeConfig,
   extractClaudeMemContext,
+  extractCustomTail,
   runGit,
   isSensitiveFile,
   parseCliArgs

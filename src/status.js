@@ -107,11 +107,13 @@ function runStatus({ cwd = process.cwd(), subcommand = 'status', flags = {} } = 
     }
   }
 
-  const pct = totalStages > 0 ? Math.round((completedStages / totalStages) * 100) : 0;
-  console.log(`  - Progress: ${completedStages}/${totalStages} (${pct}%)`);
-  for (const sd of stageDetails) {
-    const badge = sd.ok ? '✅ Ready' : `⏳ Pending (${sd.issueCount} placeholder/ref issues)`;
-    console.log(`    * ${sd.file}: ${badge}`);
+  if (totalStages > 0) {
+    const pct = Math.round((completedStages / totalStages) * 100);
+    console.log(`  - Progress: ${completedStages}/${totalStages} (${pct}%)`);
+    for (const sd of stageDetails) {
+      const badge = sd.ok ? '✅ Ready' : `⏳ Pending (${sd.issueCount} placeholder/ref issues)`;
+      console.log(`    * ${sd.file}: ${badge}`);
+    }
   }
 
   // Also report meetings/ knowledge base status if meetings/ exists

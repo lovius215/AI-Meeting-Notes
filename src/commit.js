@@ -83,8 +83,19 @@ function updateProjectIndexStatus(cwd, verifiedFiles) {
 }
 
 function runCommit({ cwd = process.cwd(), target = null, flags = {} } = {}) {
+  if (flags.m === true || flags.message === true) {
+    const msg = '⛔ Missing commit message value for -m / --message.';
+    console.error(msg);
+    return { ok: false, reason: 'invalid_flag', error: msg };
+  }
   const cfg = readConfig(cwd);
   const lang = cfg.lang;
+
+  if (cfg.features && cfg.features.git === false && !flags.force) {
+    const msg = 'Git archiving is disabled in workspace config (--no-git). Pass --force to override.';
+    console.error(msg);
+    return { ok: false, reason: 'feature_disabled', error: msg };
+  }
 
   console.log(t(lang, 'commitStart'));
 
@@ -129,9 +140,34 @@ function runCommit({ cwd = process.cwd(), target = null, flags = {} } = {}) {
   const filesToStage = [];
 
   if (statusOut.ok && statusOut.stdout) {
-    const targetPrefix = target
-      ? path.relative(cwd, path.isAbsolute(target) ? target : path.join(cwd, target)).replace(/\\/g, '/')
-      : null;
+    const allowedTargetPrefixes = [];
+    const allowedExactFiles = new Set(
+      (verifyRes.files || []).map((f) => path.relative(cwd, f).replace(/\\/g, '/'))
+    );
+    if (indexUpdated) {
+      allowedExactFiles.add('project/index.md');
+    }
+    if (target) {
+      const candidatePaths = [
+        path.isAbsolute(target) ? target : path.join(cwd, target),
+        path.join(cwd, 'meetings', String(target)),
+        path.join(cwd, 'project', String(target))
+      ];
+      for (const cp of candidatePaths) {
+        if (fs.existsSync(cp)) {
+          const rel = path.relative(cwd, cp).replace(/\\/g, '/');
+          if (rel && !rel.startsWith('..')) {
+            allowedTargetPrefixes.push(rel);
+          }
+        }
+      }
+      if (allowedTargetPrefixes.length === 0) {
+        const rawRel = path.relative(cwd, path.isAbsolute(target) ? target : path.join(cwd, target)).replace(/\\/g, '/');
+        if (rawRel && !rawRel.startsWith('..')) {
+          allowedTargetPrefixes.push(rawRel);
+        }
+      }
+    }
 
     for (const line of statusOut.stdout.split(/\r?\n/)) {
       if (!line.trim()) continue;
@@ -146,11 +182,12 @@ function runCommit({ cwd = process.cwd(), target = null, flags = {} } = {}) {
           runGit(['reset', 'HEAD', '--', rawPath], cwd);
         }
       } else if (xy !== '!!') {
-        if (targetPrefix && !normalizedRel.startsWith('..')) {
+        if (target && allowedTargetPrefixes.length > 0) {
           const matchesTarget =
-            normalizedRel === targetPrefix ||
-            normalizedRel.startsWith(`${targetPrefix}/`) ||
-            (indexUpdated && normalizedRel === 'project/index.md');
+            allowedExactFiles.has(normalizedRel) ||
+            allowedTargetPrefixes.some(
+              (prefix) => normalizedRel === prefix || normalizedRel.startsWith(`${prefix}/`)
+            );
           if (!matchesTarget) continue;
         }
         filesToStage.push(rawPath);

@@ -52,7 +52,17 @@ function parseSpecMetadata(cwd) {
 }
 
 function runBuild({ cwd = process.cwd(), subcommand = 'build', flags = {} } = {}) {
+  if (flags.name === true || flags.cli === true || flags.out === true || flags.mode === true || flags.lang === true) {
+    const msg = '⛔ Missing argument value for option flag (--name, --cli, --out, --mode, or --lang).';
+    console.error(msg);
+    return { ok: false, reason: 'invalid_flag', error: msg };
+  }
   const wsCfg = readConfig(cwd);
+  if (wsCfg.features && wsCfg.features.npm === false && !flags.force) {
+    const msg = 'npm package assembly is disabled in workspace config (--no-npm). Pass --force to override.';
+    console.error(msg);
+    return { ok: false, reason: 'feature_disabled', error: msg };
+  }
   const lang = SUPPORTED_LANGS.includes(flags.lang) ? flags.lang : wsCfg.lang || DEFAULT_LANG;
 
   // 1. If project/ exists and --skip-verify is not set, run 0-Token verify first

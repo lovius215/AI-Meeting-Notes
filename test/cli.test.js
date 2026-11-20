@@ -78,7 +78,7 @@ test('2. init creates workspace skeleton, locks 5 languages, and supports --full
 test('3. verify catches unfilled {{...}} placeholders and invalid #Lx-Ly line references', () => {
   const tmpDir = makeTempDir();
   try {
-    runInit({ cwd: tmpDir, flags: { lang: 'zh-TW' } });
+    runInit({ cwd: tmpDir, flags: { lang: 'zh-TW', mode: 'workbench' } });
 
     // Initial templates have {{...}} placeholders -> verify must fail
     const initialVerify = runVerify({ cwd: tmpDir, silent: true });
@@ -119,7 +119,7 @@ test('3. verify catches unfilled {{...}} placeholders and invalid #Lx-Ly line re
 test('4. commit runs verify, updates project/index.md, excludes sensitive files, and stops safely on merge conflicts', () => {
   const tmpDir = makeTempDir();
   try {
-    runInit({ cwd: tmpDir, flags: { lang: 'zh-TW' } });
+    runInit({ cwd: tmpDir, flags: { lang: 'zh-TW', mode: 'workbench' } });
 
     // Fill all stage files so verify passes
     const projDir = path.join(tmpDir, 'project');
@@ -159,7 +159,7 @@ test('4. commit runs verify, updates project/index.md, excludes sensitive files,
 test('5. upgrade preserves locked language, <claude-mem-context>, and existing project files', () => {
   const tmpDir = makeTempDir();
   try {
-    runInit({ cwd: tmpDir, flags: { full: true, lang: 'ko' } });
+    runInit({ cwd: tmpDir, flags: { full: true, lang: 'ko', mode: 'workbench' } });
 
     // Customize <claude-mem-context> in .<cli>/AGENTS.md and customize project/01-spec.md
     const agentsPath = path.join(tmpDir, HIDDEN_DIR, 'AGENTS.md');
@@ -287,7 +287,7 @@ test('6. scaffold generates both Zero-Command Conversational npm packages and CL
 test('7. build & pack assemble an initialized workspace into a full publishable npm package', () => {
   const tmpDir = makeTempDir();
   try {
-    runInit({ cwd: tmpDir, flags: { full: true, lang: 'zh-TW' } });
+    runInit({ cwd: tmpDir, flags: { full: true, lang: 'zh-TW', mode: 'workbench' } });
 
     // Fill out project/01-spec.md .. 04-release-plan.md as AI would in conversation
     const projDir = path.join(tmpDir, 'project');
@@ -411,9 +411,12 @@ test('9. regression checks: boolean CLI flags, backticked #Lx-Ly refs, and non-A
     assert.equal(fs.existsSync(path.join(noGitDir, 'skills')), false);
     assert.equal(fs.existsSync(path.join(noGitDir, 'rules')), false);
 
-    // 9c. pdf --html exports standalone HTML without requiring Chrome
+    // 9c. pdf --html respects --no-html unless --force is passed, and exports standalone HTML without requiring Chrome
     const htmlOut = path.join(noGitDir, 'out', 'spec.html');
-    const htmlRes = runPdf({ cwd: noGitDir, flags: { merge: true, html: true, output: htmlOut } });
+    const htmlDisabledRes = runPdf({ cwd: noGitDir, flags: { merge: true, html: true, output: htmlOut } });
+    assert.equal(htmlDisabledRes.ok, false);
+    assert.equal(htmlDisabledRes.reason, 'feature_disabled');
+    const htmlRes = runPdf({ cwd: noGitDir, flags: { merge: true, html: true, force: true, output: htmlOut } });
     assert.equal(htmlRes.ok, true);
     assert.equal(htmlRes.engine, 'html');
     assert.equal(fs.existsSync(htmlOut), true);
@@ -435,7 +438,7 @@ test('9. regression checks: boolean CLI flags, backticked #Lx-Ly refs, and non-A
 
   const tmpDir = makeTempDir();
   try {
-    runInit({ cwd: tmpDir, flags: { lang: 'zh-TW' } });
+    runInit({ cwd: tmpDir, flags: { lang: 'zh-TW', mode: 'workbench' } });
     const projDir = path.join(tmpDir, 'project');
     for (const f of fs.readdirSync(projDir)) {
       if (f !== 'index.md' && f.endsWith('.md')) {
@@ -926,7 +929,7 @@ test('14. round-3 adversarial audit: numeric SRT dialogue, multi-unknown speaker
   // 14c. 4-backtick outer code blocks & ~~~ tilde code blocks in verifyFile and markdownToHtmlBody
   const tmpDir = makeTempDir('meetnotes-round3-');
   try {
-    runInit({ cwd: tmpDir, flags: { full: true, lang: 'zh-TW' } });
+    runInit({ cwd: tmpDir, flags: { full: true, lang: 'zh-TW', mode: 'workbench' } });
     const projDir = path.join(tmpDir, 'project');
     for (const f of fs.readdirSync(projDir)) {
       if (f !== 'index.md' && f.endsWith('.md')) {
@@ -996,7 +999,7 @@ test('14. round-3 adversarial audit: numeric SRT dialogue, multi-unknown speaker
 test('15. round-4 microscope audit: Windows CRLF conflict detection, ja/ko prose conflict detection & preserving user-appended sections in .meetnotes/AGENTS.md across lang switch and upgrade', () => {
   const tmpDir = makeTempDir('meetnotes-round4-');
   try {
-    runInit({ cwd: tmpDir, flags: { full: true, lang: 'ja' } });
+    runInit({ cwd: tmpDir, flags: { full: true, lang: 'ja', mode: 'workbench' } });
 
     // 15a. Append custom user section to .meetnotes/AGENTS.md, then switch --lang en and run upgrade -> custom section preserved!
     const hiddenAgentsPath = path.join(tmpDir, HIDDEN_DIR, 'AGENTS.md');
@@ -1068,7 +1071,7 @@ test('16. round-5 deep audit: paired N-backtick inline code, hypothetical/questi
   const { main } = require('../bin/cli');
   const tmpDir = makeTempDir('meetnotes-round5-');
   try {
-    runInit({ cwd: tmpDir, flags: { full: true, lang: 'ja' } });
+    runInit({ cwd: tmpDir, flags: { full: true, lang: 'ja', mode: 'workbench' } });
 
     // 16a. Append custom user section to .meetnotes/skills/meetnotes/SKILL.md -> preserved across lang switch and upgrade
     const hiddenSkillPath = path.join(tmpDir, HIDDEN_DIR, 'skills', CLI_NAME, 'SKILL.md');
@@ -1161,6 +1164,126 @@ test('16. round-5 deep audit: paired N-backtick inline code, hypothetical/questi
         fs.rmSync(cwdMeetings, { recursive: true, force: true });
       }
     }
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('17. all-in-one final audit: clean conversational init (0 verify errors, no project/ clutter), WebVTT <v Speaker> tags, 5-lang ⚠️/🔴 inspection, URL-encoded #Lx-Ly refs, backticked table pipes, entity-encoded XSS links, sub-target commit & flag guards', () => {
+  const { main } = require('../bin/cli');
+  const tmpDir = makeTempDir('meetnotes-final-audit-');
+  try {
+    // 17a. Default `meetnotes init` (conversational mode) creates meetings/index.md & .meetnotes/rules/post-meeting-inspection.md,
+    // does NOT create project/01-spec.md tool-builder clutter, and passes verify + status immediately with 0 errors!
+    const initRes = runInit({ cwd: tmpDir, flags: { lang: 'zh-TW' } });
+    assert.equal(initRes.ok, true);
+    assert.equal(initRes.mode, 'conversational');
+    assert.equal(fs.existsSync(path.join(tmpDir, 'project')), false);
+    assert.equal(fs.existsSync(path.join(tmpDir, 'meetings', 'index.md')), true);
+    assert.equal(fs.existsSync(path.join(tmpDir, HIDDEN_DIR, 'rules', 'post-meeting-inspection.md')), true);
+
+    const freshVerify = runVerify({ cwd: tmpDir, silent: true });
+    assert.equal(freshVerify.ok, true, JSON.stringify(freshVerify.issues));
+
+    const freshStatus = runStatus({ cwd: tmpDir });
+    assert.equal(freshStatus.ok, true);
+    assert.equal(freshStatus.totalStages, 0);
+
+    // 17b. Value-less flags and invalid --mode are cleanly rejected without throwing
+    assert.equal(runInit({ cwd: tmpDir, flags: { lang: true } }).ok, false);
+    assert.equal(runInit({ cwd: tmpDir, flags: { mode: true } }).ok, false);
+    assert.equal(runInit({ cwd: tmpDir, flags: { mode: 'nonexistent-mode' } }).ok, false);
+    assert.equal(runCommit({ cwd: tmpDir, flags: { m: true } }).ok, false);
+    assert.equal(runPdf({ cwd: tmpDir, flags: { output: true } }).ok, false);
+    assert.equal(runBuild({ cwd: tmpDir, flags: { name: true } }).ok, false);
+    assert.equal(runScaffold({ cwd: tmpDir, flags: { cli: true } }).ok, false);
+    assert.equal(main(['commit', '-m']), 1);
+    assert.equal(main(['pdf', '--output']), 1);
+
+    // 17c. WebVTT with UTF-8 BOM, header metadata, cue IDs, and <v SPEAKER_00>text</v> voice tags + already-bolded **SPEAKER_01**
+    const vttVoice = applySpeakerMapping({
+      transcriptText: [
+        '\uFEFFWEBVTT - MS Teams Recording',
+        'Kind: captions',
+        'Language: zh-TW',
+        '',
+        'cue-alpha',
+        '00:05.000 --> 00:09.000',
+        '<v SPEAKER_00>大家好，今天討論架構</v>',
+        '<v.loud **SPEAKER_01**>收到，<b>同意</b>！</v>'
+      ].join('\n'),
+      mapping: { SPEAKER_00: '王經理', SPEAKER_01: '李工程師' }
+    });
+    assert.equal(vttVoice.lines.length, 2);
+    assert.equal(vttVoice.lines[0], '[00:00:05] **王經理**: 大家好，今天討論架構');
+    assert.equal(vttVoice.lines[1], '[00:00:05] **李工程師**: 收到，同意！');
+
+    // 17d. Mid-sentence hypothetical exclusion ("王經理討論如果上線日改為 12/28 的影響") + URL-encoded #Lx-Ly + inline HTML comment
+    const m1 = createMeeting({
+      cwd: tmpDir,
+      project: 'A專案',
+      title: '週會一',
+      date: '2026-11-13',
+      transcriptText: '[00:00:10] **王經理**：我們拍板上線日定在 12/01。'
+    });
+    fs.appendFileSync(
+      path.join(m1.meetingDir, '02-summary.md'),
+      '\n- **預計上線日**：12/01 ([01-transcript.md](./01-transcript.md#L1-L11))\n',
+      'utf8'
+    );
+
+    const m2 = createMeeting({
+      cwd: tmpDir,
+      project: 'A專案',
+      title: '週會二',
+      date: '2026-11-20',
+      transcriptText: '[00:00:10] **王經理**：維持原定計畫。'
+    });
+    // Add URL-encoded CJK link, inline HTML comment with {{PLACEHOLDER}}, and mid-sentence hypothetical
+    const encodedPrevFolder = encodeURIComponent('2026-11-13_週會一');
+    fs.appendFileSync(
+      path.join(m2.meetingDir, '02-summary.md'),
+      [
+        '',
+        '<!-- Commented out example {{SHOULD_NOT_TRIGGER}} and missing.js#L999 -->',
+        `- 🟢 參考上週紀錄（見 [上週摘要](../${encodedPrevFolder}/02-summary.md#L1-L8)）`,
+        '- 🟢 王經理討論如果上線日改為 12/28 的影響（見 [01-transcript.md](./01-transcript.md#L1-L11)）'
+      ].join('\n'),
+      'utf8'
+    );
+
+    const m2InspectClean = inspectMeetingDirectory(m2.meetingDir);
+    assert.equal(m2InspectClean.ok, true, JSON.stringify(m2InspectClean));
+    assert.equal(m2InspectClean.conflicts.length, 0);
+
+    // 17e. Sub-target commit: `runCommit({ cwd: tmpDir, target: 'A專案' })` resolves `meetings/A專案` and commits cleanly
+    const subTargetCommit = runCommit({ cwd: tmpDir, target: 'A專案', flags: { m: 'docs: commit A專案' } });
+    assert.equal(subTargetCommit.ok, true);
+    assert.equal(subTargetCommit.committed, true);
+
+    // 17f. 5-language `⚠️ [Human Review Required]` / `⚠️ [要確認]` / `⚠️ [확인 필요]` / `🔴` detection in inspectMeetingDirectory
+    fs.appendFileSync(
+      path.join(m2.meetingDir, '02-summary.md'),
+      '\n- 🔴 Budget figure unclear ⚠️ [Human Review Required - 00:12:00] ([01-transcript.md](./01-transcript.md#L1-L11))\n',
+      'utf8'
+    );
+    const m2InspectEnWarn = inspectMeetingDirectory(m2.meetingDir);
+    assert.equal(m2InspectEnWarn.ok, false);
+    assert.equal(m2InspectEnWarn.needsHumanReview, true);
+    assert.equal(m2InspectEnWarn.humanInterventionItems.length >= 1, true);
+
+    // 17g. Markdown table with unescaped pipe inside inline code, link with `*` in URL, and numeric entity XSS link
+    const advHtml = markdownToHtmlBody([
+      '| Flag | Description |',
+      '| :--- | :--- |',
+      '| `--lang zh-TW|en|ja` | Language option |',
+      '',
+      'Archive link: [Wayback * Archive](https://web.archive.org/web/*/https://example.com/*)',
+      'Entity XSS: [Bad](&#106;avascript:alert(1)) and [HexBad](&#x6a;avascript:alert(1))'
+    ].join('\n'));
+    assert.match(advHtml, /<td><code>--lang zh-TW\|en\|ja<\/code><\/td>\s*<td>Language option<\/td>/);
+    assert.match(advHtml, /<a href="https:\/\/web\.archive\.org\/web\/\*\/https:\/\/example\.com\/\*">Wayback \* Archive<\/a>/);
+    assert.doesNotMatch(advHtml, /javascript:/i);
+  } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
