@@ -181,6 +181,11 @@ function runCommit({ cwd = process.cwd(), target = null, flags = {} } = {}) {
         if (xy !== '!!') {
           runGit(['reset', 'HEAD', '--', rawPath], cwd);
         }
+      } else if (/\.bak(?:\.\d+)?$/i.test(rawPath)) {
+        // Never stage or commit .bak / .bak.N backup files
+        if (xy !== '!!') {
+          runGit(['reset', 'HEAD', '--', rawPath], cwd);
+        }
       } else if (xy !== '!!') {
         if (target && allowedTargetPrefixes.length > 0) {
           const matchesTarget =

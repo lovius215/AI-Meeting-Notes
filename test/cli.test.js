@@ -1336,12 +1336,128 @@ test('17. all-in-one final audit: clean conversational init (0 verify errors, no
     assert.equal(conflictCheck.conflicts.some((c) => c.key === '預算' && c.previousValue === '50 萬' && c.currentValue === '60 萬'), true);
     assert.equal(conflictCheck.conflicts.some((c) => c.key === '負責人' && c.previousValue === '王經理' && c.currentValue === '李工程師'), true);
 
-    // 17k. In-middle edits to .meetnotes/AGENTS.md are backed up to AGENTS.md.bak on upgrade
+    // 17k. In-middle edits to .meetnotes/AGENTS.md are backed up to AGENTS.md.bak on upgrade,
+    // and running upgrade a SECOND time does NOT overwrite AGENTS.md.bak!
     const agentsPath = path.join(tmpDir, HIDDEN_DIR, 'AGENTS.md');
     fs.writeFileSync(agentsPath, '# Custom In-Middle Edited AGENTS.md\nMiddle content changed.\n', 'utf8');
     runUpgrade({ cwd: tmpDir });
     assert.equal(fs.existsSync(`${agentsPath}.bak`), true);
     assert.match(fs.readFileSync(`${agentsPath}.bak`, 'utf8'), /Custom In-Middle Edited AGENTS\.md/);
+
+    // Second consecutive upgrade run must keep original human edits in AGENTS.md.bak!
+    runUpgrade({ cwd: tmpDir });
+    assert.match(fs.readFileSync(`${agentsPath}.bak`, 'utf8'), /Custom In-Middle Edited AGENTS\.md/);
+
+    // 17l. Running createMeeting with force / forceAll TWICE (or N times) NEVER overwrites human edits in .bak,
+    // and runCommit NEVER stages or commits .bak / .bak.1 files!
+    const mForceSecondSame = createMeeting({
+      cwd: tmpDir,
+      project: 'ForceProj',
+      title: 'Sync1',
+      date: '2026-11-10',
+      transcriptText: '[00:00:10] **王經理**：修正後預算 50 萬，負責人王經理。',
+      force: true
+    });
+    assert.equal(mForceSecondSame.ok, true);
+    assert.match(fs.readFileSync(path.join(mForce1.meetingDir, '01-transcript.md.bak'), 'utf8'), /OLD_TRANSCRIPT_EDIT/);
+
+    const mForceThirdDiff = createMeeting({
+      cwd: tmpDir,
+      project: 'ForceProj',
+      title: 'Sync1',
+      date: '2026-11-10',
+      transcriptText: '[00:00:10] **王經理**：第三次重跑預算 50 萬，由王經理擔任負責人。',
+      forceAll: true
+    });
+    assert.equal(mForceThirdDiff.ok, true);
+    // Primary .bak still holds original human edits; 2nd version rotated to .bak.1; 02-summary.md.bak holds HUMAN_SUMMARY_EDIT_KEEP_ME
+    assert.match(fs.readFileSync(path.join(mForce1.meetingDir, '01-transcript.md.bak'), 'utf8'), /OLD_TRANSCRIPT_EDIT/);
+    assert.equal(fs.existsSync(path.join(mForce1.meetingDir, '01-transcript.md.bak.1')), true);
+    assert.match(fs.readFileSync(path.join(mForce1.meetingDir, '02-summary.md.bak'), 'utf8'), /HUMAN_SUMMARY_EDIT_KEEP_ME/);
+
+    // Running forceAll a second time must NOT overwrite 02-summary.md.bak!
+    createMeeting({
+      cwd: tmpDir,
+      project: 'ForceProj',
+      title: 'Sync1',
+      date: '2026-11-10',
+      transcriptText: '[00:00:10] **王經理**：第四次重跑預算 50 萬，由王經理擔任負責人。',
+      forceAll: true
+    });
+    assert.match(fs.readFileSync(path.join(mForce1.meetingDir, '02-summary.md.bak'), 'utf8'), /HUMAN_SUMMARY_EDIT_KEEP_ME/);
+
+    // Commit workspace and verify ZERO .bak files are tracked in git
+    const bakCommitRes = runCommit({ cwd: tmpDir, flags: { m: 'test no bak files committed' } });
+    assert.equal(bakCommitRes.ok, true);
+    const { runGit } = require('../src/utils');
+    const trackedFiles = runGit(['ls-files'], tmpDir).stdout;
+    assert.doesNotMatch(trackedFiles, /\.bak/);
+
+    // 17m. Conflict detection precision:
+    // - Equivalent values ("預算 50 萬" vs "預算 500000 元", "上線日 12/15" vs "2026-12-15") -> 0 conflicts
+    // - Rejected proposal ("預算 60 萬的提案被否決，維持現狀") -> 0 conflicts
+    // - Owner trailing verb ("由李工程師擔任負責人") -> clean value "李工程師" (not "李工程師擔任")
+    // - 7-line transcript keeps all 7 lines in Transcript Excerpts, and 12-line transcript labels truncation clearly while keeping line-12 decision
+    const mEq1 = createMeeting({
+      cwd: tmpDir,
+      project: 'PrecisionProj',
+      title: 'M1',
+      date: '2026-11-01',
+      transcriptText: '[00:00:10] **王經理**：決議預算 50 萬，預計上線日 12/15，由王經理擔任負責人。'
+    });
+    assert.equal(mEq1.ok, true);
+
+    const sevenLines = [
+      '[00:00:01] **王經理**：第一句開場。',
+      '[00:00:02] **王經理**：第二句報告。',
+      '[00:00:03] **王經理**：第三句討論：預算 500000 元，上線日 2026-12-15。',
+      '[00:00:04] **王經理**：第四句：預算 60 萬的提案被否決，維持現狀。',
+      '[00:00:05] **王經理**：第五句補充。',
+      '[00:00:06] **王經理**：第六句確認由王經理擔任負責人。',
+      '[00:00:07] **王經理**：第七句散會。'
+    ].join('\n');
+    const mEq2 = createMeeting({
+      cwd: tmpDir,
+      project: 'PrecisionProj',
+      title: 'M2',
+      date: '2026-11-08',
+      transcriptText: sevenLines
+    });
+    assert.equal(mEq2.ok, true);
+    const mEq2Summary = fs.readFileSync(path.join(mEq2.meetingDir, '02-summary.md'), 'utf8');
+    // All 7 lines are included in Transcript Excerpts (including line 6 & line 7 "第七句散會")
+    assert.match(mEq2Summary, /第七句散會/);
+    assert.match(mEq2Summary, /## 逐字稿節錄 \(Transcript Excerpts\)/);
+
+    const eqInspect = inspectMeetingDirectory(mEq2.meetingDir);
+    assert.equal(eqInspect.conflicts.length, 0, JSON.stringify(eqInspect.conflicts));
+
+    // Now test owner change with "由李工程師擔任負責人" -> conflicts with previousValue "王經理" and currentValue "李工程師" (no trailing "擔任")
+    const mEq3 = createMeeting({
+      cwd: tmpDir,
+      project: 'PrecisionProj',
+      title: 'M3',
+      date: '2026-11-15',
+      transcriptText: Array.from({ length: 12 }, (_, i) =>
+        i === 11
+          ? '[00:02:00] **王經理**：第十二句最終拍板由李工程師擔任負責人。'
+          : `[00:00:${String(i + 1).padStart(2, '0')}] **王經理**：一般過程討論第 ${i + 1} 句。`
+      ).join('\n')
+    });
+    assert.equal(mEq3.ok, true);
+    const mEq3Summary = fs.readFileSync(path.join(mEq3.meetingDir, '02-summary.md'), 'utf8');
+    // 12-line transcript explicitly labels "僅節錄前 10/12 句" AND still captures the line-12 decision in Key Points & Decisions!
+    assert.match(mEq3Summary, /僅節錄前 10\/12 句，完整決議需由 AI 或人工提煉/);
+    assert.match(mEq3Summary, /第十二句最終拍板由李工程師擔任負責人/);
+
+    const ownerConflictInspect = inspectMeetingDirectory(mEq3.meetingDir);
+    assert.equal(
+      ownerConflictInspect.conflicts.some(
+        (c) => c.key === '負責人' && c.previousValue === '王經理' && c.currentValue === '李工程師'
+      ),
+      true,
+      JSON.stringify(ownerConflictInspect.conflicts)
+    );
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

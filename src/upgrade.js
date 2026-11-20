@@ -10,7 +10,8 @@ const {
   readConfig,
   writeConfig,
   extractClaudeMemContext,
-  extractCustomTail
+  extractCustomTail,
+  saveSafeBackup
 } = require('./utils');
 const {
   renderAgentsMd,
@@ -100,7 +101,7 @@ function runUpgrade({ cwd = process.cwd(), flags = {} } = {}) {
   if (!isDryRun) {
     ensureDir(hiddenRoot);
     if (existingAgentsRaw && existingAgentsRaw !== newAgentsContent) {
-      fs.writeFileSync(`${agentsPath}.bak`, existingAgentsRaw, 'utf8');
+      saveSafeBackup(agentsPath, newAgentsContent);
     }
     fs.writeFileSync(agentsPath, newAgentsContent, 'utf8');
   }
@@ -120,7 +121,7 @@ function runUpgrade({ cwd = process.cwd(), flags = {} } = {}) {
   if (!isDryRun) {
     ensureDir(skillDir);
     if (existingSkillRaw && existingSkillRaw !== newSkillContent) {
-      fs.writeFileSync(`${skillPath}.bak`, existingSkillRaw, 'utf8');
+      saveSafeBackup(skillPath, newSkillContent);
     }
     fs.writeFileSync(
       skillPath,

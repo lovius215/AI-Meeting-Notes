@@ -33,6 +33,8 @@ tmp/
 .tmp/
 coverage/
 *.log
+*.bak
+*.bak.*
 
 # Large Meeting Multimedia Files (Kept 100% locally in meetings/<Project>/<Date>/media/, excluded from Git unless using Git LFS)
 meetings/**/media/*.mp3

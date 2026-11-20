@@ -13,7 +13,7 @@ const {
   TOOL_MODES
 } = require('./config');
 const { t } = require('./i18n');
-const { ensureDir, readConfig, writeConfig, runGit, extractClaudeMemContext, extractCustomTail } = require('./utils');
+const { ensureDir, readConfig, writeConfig, runGit, extractClaudeMemContext, extractCustomTail, saveSafeBackup } = require('./utils');
 const {
   renderAgentsMd,
   renderSkillMd,
@@ -131,9 +131,6 @@ function runInit({ cwd = process.cwd(), flags = {} } = {}) {
       if (!flags.force) {
         customAppendedSuffix = extractCustomTail(existingAgentsRaw, oldDefault);
       }
-      if (existingAgentsRaw !== oldDefault) {
-        fs.writeFileSync(`${agentsPath}.bak`, existingAgentsRaw, 'utf8');
-      }
     }
 
     const agentsContent = renderAgentsMd({
@@ -143,6 +140,18 @@ function runInit({ cwd = process.cwd(), flags = {} } = {}) {
       pkgName: PACKAGE_NAME,
       memContext: existingMem
     }) + customAppendedSuffix;
+    if (existingAgentsRaw && existingCfg) {
+      const oldDefault = renderAgentsMd({
+        lang: existingCfg.lang,
+        mode: existingCfg.mode,
+        cliName: CLI_NAME,
+        pkgName: PACKAGE_NAME,
+        memContext: existingMem
+      });
+      if (existingAgentsRaw !== oldDefault) {
+        saveSafeBackup(agentsPath, agentsContent);
+      }
+    }
     fs.writeFileSync(agentsPath, agentsContent, 'utf8');
   }
 
@@ -172,13 +181,22 @@ function runInit({ cwd = process.cwd(), flags = {} } = {}) {
       if (!flags.force) {
         customSkillSuffix = extractCustomTail(existingSkillRaw, oldDefaultSkill);
       }
+    }
+    const newSkillContent = renderSkillMd({ lang, mode, cliName: CLI_NAME, pkgName: PACKAGE_NAME }) + customSkillSuffix;
+    if (existingSkillRaw && existingCfg) {
+      const oldDefaultSkill = renderSkillMd({
+        lang: existingCfg.lang,
+        mode: existingCfg.mode,
+        cliName: CLI_NAME,
+        pkgName: PACKAGE_NAME
+      });
       if (existingSkillRaw !== oldDefaultSkill) {
-        fs.writeFileSync(`${skillPath}.bak`, existingSkillRaw, 'utf8');
+        saveSafeBackup(skillPath, newSkillContent);
       }
     }
     fs.writeFileSync(
       skillPath,
-      renderSkillMd({ lang, mode, cliName: CLI_NAME, pkgName: PACKAGE_NAME }) + customSkillSuffix,
+      newSkillContent,
       'utf8'
     );
   }

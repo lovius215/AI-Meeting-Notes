@@ -125,6 +125,40 @@ function extractCustomTail(existingRaw, renderedDefault) {
   return '';
 }
 
+/**
+ * Safely backs up `filePath` before overwriting it with `newContent`.
+ * - Never writes a backup if `existingContent === newContent` (idempotent on repeated runs).
+ * - Never overwrites an existing `.bak` file on 2nd/Nth runs: if `.bak` already exists and
+ *   `existingContent` differs from `.bak`, rotates to `.bak.1`, `.bak.2`, etc., so the original
+ *   human-edited `.bak` is permanently protected.
+ */
+function saveSafeBackup(filePath, newContent) {
+  if (!filePath || !fs.existsSync(filePath)) return null;
+  const existingContent = fs.readFileSync(filePath, 'utf8');
+  if (typeof newContent === 'string' && existingContent === newContent) {
+    return null;
+  }
+  const primaryBak = `${filePath}.bak`;
+  if (!fs.existsSync(primaryBak)) {
+    fs.writeFileSync(primaryBak, existingContent, 'utf8');
+    return primaryBak;
+  }
+  // Primary .bak already exists: NEVER overwrite it!
+  if (fs.readFileSync(primaryBak, 'utf8') === existingContent) {
+    return primaryBak;
+  }
+  let seq = 1;
+  while (fs.existsSync(`${primaryBak}.${seq}`)) {
+    if (fs.readFileSync(`${primaryBak}.${seq}`, 'utf8') === existingContent) {
+      return `${primaryBak}.${seq}`;
+    }
+    seq++;
+  }
+  const rotatedBak = `${primaryBak}.${seq}`;
+  fs.writeFileSync(rotatedBak, existingContent, 'utf8');
+  return rotatedBak;
+}
+
 function runGit(args, cwd = process.cwd()) {
   const res = spawnSync('git', args, {
     cwd,
@@ -228,6 +262,7 @@ module.exports = {
   writeConfig,
   extractClaudeMemContext,
   extractCustomTail,
+  saveSafeBackup,
   runGit,
   isSensitiveFile,
   parseCliArgs

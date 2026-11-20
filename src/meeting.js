@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { ensureDir } = require('./utils');
+const { ensureDir, saveSafeBackup } = require('./utils');
 const { verifyFile } = require('./verify');
 
 /**
@@ -342,9 +342,6 @@ function createMeeting({
       error: `Meeting transcript already exists at ${transcriptPath}. Pass --force to overwrite (a .bak backup will be saved).`
     };
   }
-  if (hadExistingTranscript && (force || forceAll)) {
-    fs.copyFileSync(transcriptPath, `${transcriptPath}.bak`);
-  }
 
   const templatesDir = path.join(projectDir, 'templates');
   const mediaDir = path.join(meetingDir, 'media');
@@ -404,41 +401,66 @@ function createMeeting({
   const transcriptLines = [...headerLines, ...mapped.lines];
   const transcriptTotalLines = transcriptLines.length;
   const transcriptMd = transcriptLines.join('\n') + '\n';
+  if (hadExistingTranscript && (force || forceAll)) {
+    saveSafeBackup(transcriptPath, transcriptMd);
+  }
   fs.writeFileSync(transcriptPath, transcriptMd, 'utf8');
 
   // 6. Create 02-summary.md (extract actual verified statements with exact single-line #L<n> citations;
-  // by default --force only overwrites 01-transcript.md unless --force-all is passed, and always saves .bak before overwriting)
-  const extractedBullets = [];
+  // by default --force only overwrites 01-transcript.md unless --force-all is passed, and always uses saveSafeBackup before overwriting)
+  const decisionRegex = /(?:決議|决议|決定|决定|拍板|定案|上線日|上线日|預算|预算|負責人|负责人|同意|通過|通过|launch\s+date|budget|owner|decided|agreed|リリース日|予算|担当者|決定|출시일|예산|담당자|결정)/i;
+  const decisionBullets = [];
+  const excerptBullets = [];
+  let verifiedLineCount = 0;
+
   if (hasRealTranscript) {
     for (let idx = 0; idx < mapped.lines.length; idx++) {
       const lineText = mapped.lines[idx].trim();
       if (!lineText || lineText.includes('⚠️')) continue;
+      verifiedLineCount++;
       const exactLine = firstContentLine + idx;
-      extractedBullets.push(
-        `- 🟢 ${lineText}（來源：[01-transcript.md](./01-transcript.md#L${exactLine})）`
-      );
-      if (extractedBullets.length >= 5) break;
+      const bullet = `- 🟢 ${lineText}（來源：[01-transcript.md](./01-transcript.md#L${exactLine})）`;
+      if (decisionRegex.test(lineText)) {
+        decisionBullets.push(bullet);
+      }
+      excerptBullets.push(bullet);
     }
   }
-  if (extractedBullets.length === 0) {
-    const fallbackBadge = hasRealTranscript ? '🟡' : '🔴 ⚠️ [需人為確認 - 尚未匯入逐字稿]';
-    extractedBullets.push(
-      `- ${fallbackBadge} **討論事項 1**：詳見逐字稿原始對話紀錄（來源：[01-transcript.md](./01-transcript.md#L${firstContentLine}-L${transcriptTotalLines})）。`
-    );
+
+  const maxExcerpts = 10;
+  const shownExcerpts = excerptBullets.slice(0, maxExcerpts);
+  const isTruncatedExcerpts = excerptBullets.length > maxExcerpts;
+  const excerptHeading = isTruncatedExcerpts
+    ? `## 逐字稿節錄 (Transcript Excerpts — 僅節錄前 ${shownExcerpts.length}/${verifiedLineCount} 句，完整決議需由 AI 或人工提煉)`
+    : '## 逐字稿節錄 (Transcript Excerpts)';
+
+  if (decisionBullets.length === 0) {
+    if (shownExcerpts.length > 0) {
+      decisionBullets.push(...shownExcerpts);
+    } else {
+      const fallbackBadge = hasRealTranscript ? '🟡' : '🔴 ⚠️ [需人為確認 - 尚未匯入逐字稿]';
+      decisionBullets.push(
+        `- ${fallbackBadge} **待提煉決議**：尚無已驗證之決議原句，請由 AI 或人工補充（來源：[01-transcript.md](./01-transcript.md#L${firstContentLine}-L${transcriptTotalLines})）。`
+      );
+    }
   }
+
   const summaryBadge = hasRealTranscript ? '🟢' : '🔴 ⚠️ [需人為確認 - 尚未匯入逐字稿]';
   const summaryMd = `# 02. 會議摘要與重點決議 (${safeProject} - ${cleanDate})
 
 ## 執行摘要 (Executive Summary)
-- ${summaryBadge} 本次會議針對 **${safeProject}**（${title}）進行紀錄整理（來源：[01-transcript.md](./01-transcript.md#L${firstContentLine}-L${transcriptTotalLines})）。
+- ${summaryBadge} 本次 **${safeProject}**（${title}）共記錄 ${hasRealTranscript ? mapped.lines.length : 0} 句對話（已驗證 ${verifiedLineCount} 句，待確認 ${mapped.uncertaintyFlags.length} 項；來源：[01-transcript.md](./01-transcript.md#L${firstContentLine}-L${transcriptTotalLines})）。
 
 ## 核心討論重點與決議 (Key Points & Decisions)
-${extractedBullets.join('\n')}
+${decisionBullets.join('\n')}
+
+${excerptHeading}
+${shownExcerpts.length > 0 ? shownExcerpts.join('\n') : `- ${summaryBadge} 詳見 [01-transcript.md](./01-transcript.md#L${firstContentLine}-L${transcriptTotalLines})`}
 `;
   const summaryPath = path.join(meetingDir, '02-summary.md');
   if (!fs.existsSync(summaryPath) || forceAll) {
     if (fs.existsSync(summaryPath) && forceAll) {
-      fs.copyFileSync(summaryPath, `${summaryPath}.bak`);
+      saveSafeBackup(summaryPath, summaryMd);
     }
     fs.writeFileSync(summaryPath, summaryMd, 'utf8');
   }
@@ -470,7 +492,7 @@ ${uncertaintySection}
   const todosPath = path.join(meetingDir, '03-todos-and-discussion.md');
   if (!fs.existsSync(todosPath) || forceAll) {
     if (fs.existsSync(todosPath) && forceAll) {
-      fs.copyFileSync(todosPath, `${todosPath}.bak`);
+      saveSafeBackup(todosPath, todosMd);
     }
     fs.writeFileSync(todosPath, todosMd, 'utf8');
   }
@@ -615,10 +637,11 @@ function extractKeyFacts(mdContent, sourceLabel) {
     const rawLine = lines[i];
     const lineNum = i + 1;
 
-    // Skip hypothetical questions, unconfirmed ⚠️ lines, or conditional clauses (even mid-sentence like "討論如果..." or "...是否...？") so they don't trigger false decision conflicts
+    // Skip hypothetical questions, unconfirmed ⚠️ lines, conditional clauses, or rejected/status-quo proposals ("被否決，維持現狀") so they don't trigger false decision conflicts
     if (
       /⚠️|[\?？]/.test(rawLine) ||
-      /(?:如果|假如|假設|假设|是否|討論是否|讨论是否|評估是否|评估是否|尚未決定|尚未决定|未決議|未决议|(?:^|[\s，,：:])若|\bif\b|\bwhether\b|\bwhat\s+if\b|もし|仮に|만약|혹시)/i.test(rawLine)
+      /(?:如果|假如|假設|假设|是否|討論是否|讨论是否|評估是否|评估是否|尚未決定|尚未决定|未決議|未决议|(?:^|[\s，,：:])若|\bif\b|\bwhether\b|\bwhat\s+if\b|もし|仮に|만약|혹시)/i.test(rawLine) ||
+      /(?:被否決|被否决|否決|否决|不採納|不采纳|不通過|不通过|維持現狀|维持现状|維持原案|维持原案|維持不變|维持不变|駁回|驳回|取消該提案|取消该提案|\brejected\b|\bvoted\s+down\b|\bkeep\s+as\s+is\b|\bunchanged\b|却下|見送り|現状維持|기각|부결|현상\s*유지)/i.test(rawLine)
     ) {
       continue;
     }
@@ -689,7 +712,7 @@ function extractKeyFacts(mdContent, sourceLabel) {
     if (ownerMatch) {
       const candidateOwner = cleanCapturedValue(ownerMatch[1])
         .replace(/^(?:改由|改為|改为|換由|换由|換成|换成|為|为|是)\s*/, '')
-        .replace(/(?:負責|负责)$/, '')
+        .replace(/(?:擔任|担任|負責|负责|處理|处理|接手|主導|主导|主責|主责|執行|执行)+$/, '')
         .trim();
       if (candidateOwner && !/^(?:待確認|待确认|TBD)$/i.test(candidateOwner)) {
         facts['負責人'] = { value: candidateOwner, line: lineNum, source: sourceLabel };
@@ -697,6 +720,64 @@ function extractKeyFacts(mdContent, sourceLabel) {
     }
   }
   return facts;
+}
+
+function parseCanonicalBudget(val) {
+  const s = String(val || '').replace(/,/g, '').trim();
+  const m = s.match(/^(\$)?\s*([0-9]+(?:\.[0-9]+)?)\s*(万円|億円|만원|억원|USD|TWD|NTD|JPY|KRW|萬|万|億|亿|元|円|원|만|k|K|M)?$/i);
+  if (!m) return null;
+  const hasDollar = Boolean(m[1]);
+  const num = parseFloat(m[2]);
+  if (Number.isNaN(num)) return null;
+  const unit = (m[3] || '').toLowerCase();
+  let multiplier = 1;
+  if (unit === '萬' || unit === '万' || unit === '万円' || unit === '만원' || unit === '만') {
+    multiplier = 10000;
+  } else if (unit === '億' || unit === '亿' || unit === '億円' || unit === '억원') {
+    multiplier = 100000000;
+  } else if (unit === 'k') {
+    multiplier = 1000;
+  } else if (unit === 'm') {
+    multiplier = 1000000;
+  }
+  let currency = 'default';
+  if (hasDollar || unit === 'usd') currency = 'usd';
+  else if (unit === '万円' || unit === '億円' || unit === '円' || unit === 'jpy') currency = 'jpy';
+  else if (unit === '만원' || unit === '억원' || unit === '원' || unit === '만' || unit === 'krw') currency = 'krw';
+  return { amount: Math.round(num * multiplier * 100) / 100, currency };
+}
+
+function parseCanonicalDate(val) {
+  const s = String(val || '').trim();
+  let m = s.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+  if (m) return { year: parseInt(m[1], 10), month: parseInt(m[2], 10), day: parseInt(m[3], 10) };
+  m = s.match(/^(\d{1,2})[-/](\d{1,2})$/);
+  if (m) return { year: null, month: parseInt(m[1], 10), day: parseInt(m[2], 10) };
+  m = s.match(/^(?:(\d{4})年\s*)?(\d{1,2})月\s*(\d{1,2})日$/);
+  if (m) return { year: m[1] ? parseInt(m[1], 10) : null, month: parseInt(m[2], 10), day: parseInt(m[3], 10) };
+  m = s.match(/^(?:(\d{4})년\s*)?(\d{1,2})월\s*(\d{1,2})일$/);
+  if (m) return { year: m[1] ? parseInt(m[1], 10) : null, month: parseInt(m[2], 10), day: parseInt(m[3], 10) };
+  return null;
+}
+
+function areFactValuesEquivalent(key, valA, valB) {
+  if (valA === valB) return true;
+  if (key === '預算') {
+    const bA = parseCanonicalBudget(valA);
+    const bB = parseCanonicalBudget(valB);
+    if (bA && bB && (bA.currency === bB.currency || bA.currency === 'default' || bB.currency === 'default')) {
+      return bA.amount === bB.amount;
+    }
+  }
+  if (key === '預計上線日') {
+    const dA = parseCanonicalDate(valA);
+    const dB = parseCanonicalDate(valB);
+    if (dA && dB) {
+      const sameYear = !dA.year || !dB.year || dA.year === dB.year;
+      return sameYear && dA.month === dB.month && dA.day === dB.day;
+    }
+  }
+  return false;
 }
 
 /**
@@ -822,7 +903,7 @@ function inspectMeetingDirectory(meetingDir) {
     }
 
     for (const [key, curr] of Object.entries(currentFacts)) {
-      if (baselineFacts[key] && baselineFacts[key].value !== curr.value) {
+      if (baselineFacts[key] && !areFactValuesEquivalent(key, baselineFacts[key].value, curr.value)) {
         conflicts.push({
           key,
           currentValue: curr.value,
