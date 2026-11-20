@@ -207,6 +207,8 @@ const BOOLEAN_FLAGS = new Set([
   'tarball',
   'skip-verify',
   'no-git',
+  'no-push',
+  'local',
   'no-pdf',
   'no-html',
   'no-npm',

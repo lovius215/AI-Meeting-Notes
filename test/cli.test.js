@@ -1505,8 +1505,8 @@ test('17. all-in-one final audit: clean conversational init (0 verify errors, no
     assert.equal(mMorning.ok, true);
     assert.match(fs.readFileSync(path.join(mMorning.meetingDir, '01-transcript.md'), 'utf8'), /時長: 00:00:05/);
     const morningTodos = fs.readFileSync(path.join(mMorning.meetingDir, '03-todos-and-discussion.md'), 'utf8');
-    // Real action item extracted with owner "李工程師", due date "11/25", and exact citation #L12
-    assert.match(morningTodos, /\|\s*AI-01\s*\|\s*請李工程師於 11\/25 前完成壓力測試報告。\s*\|\s*李工程師\s*\|\s*11\/25\s*\|\s*🟢 已溯源至逐字稿\s*\|.*#L12\)/);
+    // Real action item extracted with [委派] tag, owner "李工程師", due date "11/25", and exact citation #L12
+    assert.match(morningTodos, /\|\s*AI-01\s*\|\s*\[委派\] 請李工程師於 11\/25 前完成壓力測試報告。\s*\|\s*李工程師\s*\|\s*11\/25\s*\|\s*🟢 已溯源至逐字稿\s*\|.*#L12\)/);
 
     fs.appendFileSync(
       path.join(mMorning.meetingDir, '02-summary.md'),
@@ -1539,7 +1539,7 @@ test('17. all-in-one final audit: clean conversational init (0 verify errors, no
     );
 
     // Now update mMorning's transcript with force: true (without forceAll) -> 02 & 03 become stale!
-    createMeeting({
+    const forceStaleRes = createMeeting({
       cwd: tmpDir,
       project: 'SameDayProj',
       title: 'Morning-Sync',
@@ -1548,9 +1548,148 @@ test('17. all-in-one final audit: clean conversational init (0 verify errors, no
       transcriptText: '[00:00:02] **王經理**：更新後的逐字稿內容，請李工程師於 11/28 前完成壓力測試報告。',
       force: true
     });
+    assert.deepEqual(forceStaleRes.staleFiles, ['02-summary.md', '03-todos-and-discussion.md']);
     const staleInspect = inspectMeetingDirectory(mMorning.meetingDir);
     assert.equal(staleInspect.ok, false);
     assert.deepEqual(staleInspect.staleFiles, ['02-summary.md', '03-todos-and-discussion.md']);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('18. BUG-001~BUG-007 regression suite: general discussion vs 🟢 decision, deliverable overwrite lock, multi-chunk WAV duration, action item delegation/commitment/suggestion semantics, --no-push & verify stale-hash gate', () => {
+  const { getMediaMetadata } = require('../src/meeting');
+  const { runGit } = require('../src/utils');
+  const tmpDir = makeTempDir('meetnotes-bug001-007-');
+  try {
+    runInit({ cwd: tmpDir, flags: { lang: 'zh-TW' } });
+
+    // BUG-001: General discussion lines use 📝 (never 🟢) and do NOT get promoted into 🟢 decisions
+    const mGen = createMeeting({
+      cwd: tmpDir,
+      project: 'BugProj',
+      title: 'Casual-Chat',
+      date: '2026-11-10',
+      transcriptText: '[00:00:01] **王經理**：今天天氣不錯，大家早安。\n[00:00:05] **李工程師**：早安，剛泡好咖啡。'
+    });
+    assert.equal(mGen.ok, true);
+    const genSum = fs.readFileSync(path.join(mGen.meetingDir, '02-summary.md'), 'utf8');
+    assert.match(genSum, /🟡 \*\*待提煉決議\*\*/);
+    assert.match(genSum, /- 📝 \[00:00:01\] \*\*王經理\*\*：今天天氣不錯，大家早安。/);
+    assert.doesNotMatch(genSum, /- 🟢 \[00:00:01\]/);
+
+    // BUG-002: generateDeliverableFromTemplate refuses overwrite unless force: true (saving .bak)
+    const tplPath = path.join(mGen.projectDir, 'templates', 'change-request.md');
+    const d1 = generateDeliverableFromTemplate({
+      meetingDir: mGen.meetingDir,
+      templatePath: tplPath,
+      outputName: 'cr.md',
+      values: { PROJECT_NAME: 'BugProj', REQUESTER: 'OriginalAuthor' }
+    });
+    assert.equal(d1.ok, true);
+
+    const d2Blocked = generateDeliverableFromTemplate({
+      meetingDir: mGen.meetingDir,
+      templatePath: tplPath,
+      outputName: 'cr.md',
+      values: { PROJECT_NAME: 'BugProj', REQUESTER: 'NewAuthor' }
+    });
+    assert.equal(d2Blocked.ok, false);
+    assert.equal(d2Blocked.reason, 'deliverable_already_exists');
+    assert.match(fs.readFileSync(d1.outputPath, 'utf8'), /OriginalAuthor/);
+
+    const d3Force = generateDeliverableFromTemplate({
+      meetingDir: mGen.meetingDir,
+      templatePath: tplPath,
+      outputName: 'cr.md',
+      values: { PROJECT_NAME: 'BugProj', REQUESTER: 'NewAuthor' },
+      force: true
+    });
+    assert.equal(d3Force.ok, true);
+    assert.match(fs.readFileSync(d3Force.outputPath, 'utf8'), /NewAuthor/);
+    assert.match(fs.readFileSync(`${d3Force.outputPath}.bak`, 'utf8'), /OriginalAuthor/);
+
+    // BUG-003: WAV with extra JUNK (100 bytes) + LIST (20 bytes) chunks before fmt & data parses exact 5.0s duration
+    const junkWavPath = path.join(tmpDir, 'with-junk.wav');
+    const junkPayloadSize = 100;
+    const listPayloadSize = 20;
+    const dataSize = 80000; // 5s at 16000 byteRate
+    const totalSize = 12 + (8 + junkPayloadSize) + (8 + listPayloadSize) + (8 + 16) + (8 + dataSize);
+    const buf = Buffer.alloc(totalSize);
+    let p = 0;
+    buf.write('RIFF', p, 'ascii'); p += 4;
+    buf.writeUInt32LE(totalSize - 8, p); p += 4;
+    buf.write('WAVE', p, 'ascii'); p += 4;
+    // Extra JUNK chunk
+    buf.write('JUNK', p, 'ascii'); p += 4;
+    buf.writeUInt32LE(junkPayloadSize, p); p += 4;
+    p += junkPayloadSize;
+    // Extra LIST chunk
+    buf.write('LIST', p, 'ascii'); p += 4;
+    buf.writeUInt32LE(listPayloadSize, p); p += 4;
+    p += listPayloadSize;
+    // fmt  chunk
+    buf.write('fmt ', p, 'ascii'); p += 4;
+    buf.writeUInt32LE(16, p); p += 4;
+    buf.writeUInt16LE(1, p); p += 2;
+    buf.writeUInt16LE(1, p); p += 2;
+    buf.writeUInt32LE(8000, p); p += 4;
+    buf.writeUInt32LE(16000, p); p += 4; // byteRate
+    buf.writeUInt16LE(2, p); p += 2;
+    buf.writeUInt16LE(16, p); p += 2;
+    // data chunk
+    buf.write('data', p, 'ascii'); p += 4;
+    buf.writeUInt32LE(dataSize, p); p += 4;
+    fs.writeFileSync(junkWavPath, buf);
+
+    const junkWavMeta = getMediaMetadata(junkWavPath);
+    assert.equal(junkWavMeta.durationSeconds, 5);
+    assert.equal(junkWavMeta.durationFormatted, '00:00:05');
+
+    // BUG-004 & BUG-005: Action items distinguish Delegation, Self-Commitment, Unassigned TODO (never speaker!), and Suggestion
+    const mActions = createMeeting({
+      cwd: tmpDir,
+      project: 'BugProj',
+      title: 'Actions-Semantics',
+      date: '2026-11-12',
+      transcriptText: [
+        '[00:00:01] **王經理**：待辦：下週要補齊系統文件。',
+        '[00:00:05] **陳工程師**：我會負責於 11/20 前完成單元測試。',
+        '[00:00:10] **王經理**：建議可以考慮於 11/30 前完成壓測。'
+      ].join('\n')
+    });
+    assert.equal(mActions.ok, true);
+    const actTodos = fs.readFileSync(path.join(mActions.meetingDir, '03-todos-and-discussion.md'), 'utf8');
+    // Unassigned TODO must be 待確認 (TBD), NOT 王經理!
+    assert.match(actTodos, /\|\s*AI-01\s*\|\s*\[待辦\] 待辦：下週要補齊系統文件。\s*\|\s*待確認 \(TBD\)\s*\|/);
+    // Self-commitment assigns speaker 陳工程師
+    assert.match(actTodos, /\|\s*AI-02\s*\|\s*\[承諾\] 我會負責於 11\/20 前完成單元測試。\s*\|\s*陳工程師\s*\|\s*11\/20\s*\|\s*🟢 已溯源至逐字稿\s*\|/);
+    // Suggestion is marked [建議 - 需確認] and 🟡 建議事項（未拍板）
+    assert.match(actTodos, /\|\s*AI-03\s*\|\s*\[建議 - 需確認\] 建議可以考慮於 11\/30 前完成壓測。\s*\|\s*待確認 \(TBD\)\s*\|.*🟡 建議事項（未拍板）/);
+
+    // BUG-006: runCommit with --no-push skips remote sync even when a broken/unreachable remote is configured
+    runGit(['remote', 'add', 'origin', '/tmp/non-existent-remote-repo-99999.git'], tmpDir);
+    const localOnlyCommit = runCommit({ cwd: tmpDir, flags: { m: 'chore: local only commit', 'no-push': true } });
+    assert.equal(localOnlyCommit.ok, true);
+    assert.equal(localOnlyCommit.committed, true);
+    assert.equal(localOnlyCommit.pushed, false);
+
+    // BUG-007: Updating 01-transcript.md via --force makes verify AND commit actively FAIL with stale_transcript!
+    createMeeting({
+      cwd: tmpDir,
+      project: 'BugProj',
+      title: 'Actions-Semantics',
+      date: '2026-11-12',
+      transcriptText: '[00:00:01] **王經理**：逐字稿已大幅更新。',
+      force: true
+    });
+    const staleVerify = runVerify({ cwd: tmpDir, target: mActions.meetingDir, silent: true });
+    assert.equal(staleVerify.ok, false);
+    assert.equal(staleVerify.issues.some((i) => i.type === 'stale_transcript'), true);
+
+    const staleCommit = runCommit({ cwd: tmpDir, target: mActions.meetingDir, flags: { m: 'should block stale', 'no-push': true } });
+    assert.equal(staleCommit.ok, false);
+    assert.equal(staleCommit.reason, 'verify_failed');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

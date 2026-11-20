@@ -22,23 +22,51 @@ function formatDurationHMS(totalSeconds) {
 
 /**
  * Zero-dependency media duration prober:
- * 1. Parses standard RIFF/WAVE (.wav) headers natively in Node.js (0 external binaries required).
+ * 1. Parses RIFF/WAVE (.wav) chunks dynamically (properly skipping JUNK/LIST/INFO/bext/fact chunks before/after fmt & data).
  * 2. Optionally invokes `ffprobe` if installed on the system for .mp3/.m4a/.mp4/.mov/.mkv/etc.
  */
 function probeMediaDurationSeconds(filePath, fileSize) {
   try {
     const fd = fs.openSync(filePath, 'r');
     try {
-      const header = Buffer.alloc(44);
-      const read = fs.readSync(fd, header, 0, 44, 0);
+      const riffHeader = Buffer.alloc(12);
+      const readRiff = fs.readSync(fd, riffHeader, 0, 12, 0);
       if (
-        read >= 44 &&
-        header.toString('ascii', 0, 4) === 'RIFF' &&
-        header.toString('ascii', 8, 12) === 'WAVE'
+        readRiff >= 12 &&
+        riffHeader.toString('ascii', 0, 4) === 'RIFF' &&
+        riffHeader.toString('ascii', 8, 12) === 'WAVE'
       ) {
-        const byteRate = header.readUInt32LE(28);
-        if (byteRate > 0 && fileSize > 44) {
-          return Math.round(((fileSize - 44) / byteRate) * 100) / 100;
+        let offset = 12;
+        let byteRate = 0;
+        let dataSize = 0;
+        const chunkHeader = Buffer.alloc(8);
+        let guard = 0;
+
+        while (offset + 8 <= fileSize && guard < 256) {
+          guard++;
+          const r = fs.readSync(fd, chunkHeader, 0, 8, offset);
+          if (r < 8) break;
+          const chunkId = chunkHeader.toString('ascii', 0, 4);
+          const chunkSize = chunkHeader.readUInt32LE(4);
+          const payloadOffset = offset + 8;
+
+          if (chunkId === 'fmt ' && chunkSize >= 16 && payloadOffset + 12 <= fileSize) {
+            const fmtBuf = Buffer.alloc(12);
+            if (fs.readSync(fd, fmtBuf, 0, 12, payloadOffset) >= 12) {
+              byteRate = fmtBuf.readUInt32LE(8);
+            }
+          } else if (chunkId === 'data') {
+            dataSize = Math.min(chunkSize, Math.max(0, fileSize - payloadOffset));
+          }
+
+          if (byteRate > 0 && dataSize > 0) {
+            return Math.round((dataSize / byteRate) * 100) / 100;
+          }
+
+          // RIFF chunks are word-aligned (even byte boundary)
+          const step = 8 + chunkSize + (chunkSize % 2);
+          if (step <= 8) break;
+          offset += step;
         }
       }
     } finally {
@@ -289,7 +317,9 @@ function isSubPath(parentDir, childPath) {
 }
 
 function extractActionItemsFromLines(mappedLines, firstContentLine, transcriptTotalLines, hasRealTranscript) {
-  const actionRegex = /(?:待辦|待办|TODO|Action\s*Item|請\s*[^，,。：:\s]{2,12}\s*(?:負責|负责|處理|处理|協助|协助|提供|準備|准备|完成|跟進|跟进)|由\s*[^，,。：:\s]{2,12}\s*(?:負責|负责|處理|处理|跟進|跟进|準備|准备|完成)|(?:我會|我会|我來|我来)(?:負責|负责|處理|处理|準備|准备|完成|跟進|跟进)|於\s*[^，,。\s]{2,15}\s*前(?:完成|提交|交付|提供)|will\s+(?:prepare|handle|send|update|fix|follow\s+up|complete)|action\s+item|宿題|対応する|할\s*일)/i;
+  const actionRegex = /(?:待辦|待办|TODO|Action\s*Item|請\s*[^，,。：:\s]{2,12}\s*(?:於|在|負責|负责|處理|处理|協助|协助|提供|準備|准备|完成|跟進|跟进)|由\s*[^，,。：:\s]{2,12}\s*(?:負責|负责|處理|处理|跟進|跟进|準備|准备|完成)|(?:我會|我会|我來|我来)(?:負責|负责|處理|处理|準備|准备|完成|跟進|跟进)|於\s*[^，,。\s]{2,15}\s*前(?:完成|提交|交付|提供)|I\s+will\s+(?:prepare|handle|send|update|fix|follow\s+up|complete)|action\s+item|宿題|対応する|할\s*일)/i;
+  const suggestionRegex = /(?:建議|建议|可以考慮|可以考虑|或許可以|或许可以|不妨|\bsuggest\b|\bmaybe\s+we\s+should\b|\bcould\s+consider\b|提案ですが|제안)/i;
+  const selfCommitRegex = /(?:我會|我会|我來|我来|由我|我負責|我负责|\bI\s+will\b|\bI'll\b|私が担当|제가\s*담당)/i;
   const extractedRows = [];
 
   if (hasRealTranscript && Array.isArray(mappedLines)) {
@@ -302,13 +332,28 @@ function extractActionItemsFromLines(mappedLines, firstContentLine, transcriptTo
       const speakerMatch = raw.match(/\*\*([^*]+)\*\*/);
       const speakerName = speakerMatch ? speakerMatch[1].trim() : null;
 
+      const isSuggestion = suggestionRegex.test(raw);
+      const isSelfCommit = selfCommitRegex.test(raw);
       const assigneeMatch =
         raw.match(/(?:請|由)\s*([A-Za-z0-9_\u4e00-\u9fa5\u3040-\u30ff\uac00-\ud7af]{2,10}?)(?=\s*(?:於|在|負責|负责|處理|处理|協助|协助|提供|準備|准备|完成|跟進|跟进|提交|交付))/) ||
         raw.match(/(?:負責人|负责人|Owner|PIC|担当者|담당자)(?:為|为|是|[:：]|\s+)\s*([A-Za-z0-9_\u4e00-\u9fa5\u3040-\u30ff\uac00-\ud7af]{2,12})/);
-      const rawOwner = assigneeMatch
-        ? assigneeMatch[1].replace(/(?:擔任|担任|負責|负责|處理|处理)+$/, '').trim()
-        : (speakerName || '待確認 (TBD)');
-      const owner = rawOwner || '待確認 (TBD)';
+
+      // Distinguish delegation vs self-commitment vs suggestion vs unassigned task:
+      // NEVER blindly assign speakerName when no explicit delegation or self-commitment ("我會/我來/I will") is present!
+      let semanticTag = '[待辦]';
+      let owner = '待確認 (TBD)';
+      if (isSuggestion) {
+        semanticTag = '[建議 - 需確認]';
+        if (assigneeMatch) {
+          owner = assigneeMatch[1].replace(/(?:擔任|担任|負責|负责|處理|处理)+$/, '').trim() || '待確認 (TBD)';
+        }
+      } else if (assigneeMatch) {
+        semanticTag = '[委派]';
+        owner = assigneeMatch[1].replace(/(?:擔任|担任|負責|负责|處理|处理)+$/, '').trim() || '待確認 (TBD)';
+      } else if (isSelfCommit && speakerName) {
+        semanticTag = '[承諾]';
+        owner = speakerName;
+      }
 
       const dueMatch = raw.match(/([0-9]{4}[-/][0-9]{1,2}[-/][0-9]{1,2}|[0-9]{1,2}\/[0-9]{1,2}|[0-9]{1,2}月[0-9]{1,2}日|下週[一二三四五六日]?|本週[一二三四五六日]?|下周[一二三四五六日]?|本周[一二三四五六日]?|Friday|Monday|Tuesday|Wednesday|Thursday)/i);
       const dueDate = dueMatch ? dueMatch[1].trim() : '待確認 (TBD)';
@@ -320,10 +365,12 @@ function extractActionItemsFromLines(mappedLines, firstContentLine, transcriptTo
         .trim();
 
       const hasBothOwnerAndDue = owner !== '待確認 (TBD)' && dueDate !== '待確認 (TBD)';
-      const badge = hasBothOwnerAndDue ? '🟢 已溯源至逐字稿' : '🟡 待確認負責人/期限 (TBD)';
+      const badge = isSuggestion
+        ? '🟡 建議事項（未拍板）'
+        : (hasBothOwnerAndDue ? '🟢 已溯源至逐字稿' : '🟡 待確認負責人/期限 (TBD)');
       const aiId = `AI-${String(extractedRows.length + 1).padStart(2, '0')}`;
       extractedRows.push(
-        `| ${aiId} | ${cleanTask} | ${owner} | ${dueDate} | ${badge} | [01-transcript.md](./01-transcript.md#L${exactLine}) | ⏳ Pending |`
+        `| ${aiId} | ${semanticTag} ${cleanTask} | ${owner} | ${dueDate} | ${badge} | [01-transcript.md](./01-transcript.md#L${exactLine}) | ⏳ Pending |`
       );
     }
   }
@@ -519,9 +566,10 @@ function createMeeting({
   }
   fs.writeFileSync(transcriptPath, transcriptMd, 'utf8');
 
-  // 6. Create 02-summary.md (extract actual verified statements with exact single-line #L<n> citations;
+  // 6. Create 02-summary.md (BUG-001: separate formal decision bullets 🟢 from general transcript excerpts 📝;
   // by default --force only overwrites 01-transcript.md unless --force-all is passed, and always uses saveSafeBackup before overwriting)
   const decisionRegex = /(?:決議|决议|決定|决定|拍板|定案|上線日|上线日|預算|预算|負責人|负责人|同意|通過|通过|launch\s+date|budget|owner|decided|agreed|リリース日|予算|担当者|決定|출시일|예산|담당자|결정)/i;
+  const nonDecisionRegex = /(?:如果|假如|假設|假设|是否|討論是否|讨论是否|被否決|被否决|否決|否决|維持現狀|维持现状|維持原案|维持原案|[\?？])/;
   const decisionBullets = [];
   const excerptBullets = [];
   let verifiedLineCount = 0;
@@ -532,11 +580,12 @@ function createMeeting({
       if (!lineText || lineText.includes('⚠️')) continue;
       verifiedLineCount++;
       const exactLine = firstContentLine + idx;
-      const bullet = `- 🟢 ${lineText}（來源：[01-transcript.md](./01-transcript.md#L${exactLine})）`;
-      if (decisionRegex.test(lineText)) {
-        decisionBullets.push(bullet);
+      const isDecisionLine = decisionRegex.test(lineText) && !nonDecisionRegex.test(lineText);
+      if (isDecisionLine) {
+        decisionBullets.push(`- 🟢 ${lineText}（來源：[01-transcript.md](./01-transcript.md#L${exactLine})）`);
       }
-      excerptBullets.push(bullet);
+      // General transcript excerpts use neutral 📝 instead of 🟢 so normal discussion is never mistaken for a formal decision
+      excerptBullets.push(`- 📝 ${lineText}（來源：[01-transcript.md](./01-transcript.md#L${exactLine})）`);
     }
   }
 
@@ -548,24 +597,20 @@ function createMeeting({
     : '## 逐字稿節錄 (Transcript Excerpts)';
 
   if (decisionBullets.length === 0) {
-    if (shownExcerpts.length > 0) {
-      decisionBullets.push(...shownExcerpts);
-    } else {
-      const fallbackBadge = hasRealTranscript ? '🟡' : '🔴 ⚠️ [需人為確認 - 尚未匯入逐字稿]';
-      decisionBullets.push(
-        `- ${fallbackBadge} **待提煉決議**：尚無已驗證之決議原句，請由 AI 或人工補充（來源：[01-transcript.md](./01-transcript.md#L${firstContentLine}-L${transcriptTotalLines})）。`
-      );
-    }
+    const fallbackBadge = hasRealTranscript ? '🟡' : '🔴 ⚠️ [需人為確認 - 尚未匯入逐字稿]';
+    decisionBullets.push(
+      `- ${fallbackBadge} **待提煉決議**：尚無明確決議關鍵句，請由 AI 或人工從下方逐字稿節錄提煉（來源：[01-transcript.md](./01-transcript.md#L${firstContentLine}-L${transcriptTotalLines})）。`
+    );
   }
 
   const summaryBadge = hasRealTranscript ? '🟢' : '🔴 ⚠️ [需人為確認 - 尚未匯入逐字稿]';
   const riskLegendLine = hasRealTranscript
-    ? '\n> **風險標記定義**：`🟢 已溯源至逐字稿`（具備 `#Lx-Ly` 真實行號與時間戳依據；若來源為 ASR 初稿，關鍵數字仍建議對照原音複核）｜`🟡 上下文推論 / 待確認`｜`🔴 高不確定性需人為介入`\n'
+    ? '\n> **風險標記定義**：`🟢 已溯源決議`（具備 `#Lx-Ly` 行號依據之決議句；若來源為 ASR 初稿，關鍵數字仍建議對照原音複核）｜`📝 一般逐字稿節錄`（非正式決議）｜`🟡 上下文推論 / 待確認`｜`🔴 高不確定性需人為介入`\n'
     : '';
   const summaryMd = `# 02. 會議摘要與重點決議 (${safeProject} - ${cleanDate})
 ${riskLegendLine}
 ## 執行摘要 (Executive Summary)
-- ${summaryBadge} 本次 **${safeProject}**（${title}）共記錄 ${hasRealTranscript ? mapped.lines.length : 0} 句對話（已溯源 ${verifiedLineCount} 句，待確認 ${mapped.uncertaintyFlags.length} 項；來源：[01-transcript.md](./01-transcript.md#L${firstContentLine}-L${transcriptTotalLines})）。
+- ${summaryBadge} 本次 **${safeProject}**（${title}）共記錄 ${hasRealTranscript ? mapped.lines.length : 0} 句對話（決議句 ${decisionBullets.filter((b) => b.startsWith('- 🟢')).length} 條，逐字稿節錄 ${verifiedLineCount} 句，待確認 ${mapped.uncertaintyFlags.length} 項；來源：[01-transcript.md](./01-transcript.md#L${firstContentLine}-L${transcriptTotalLines})）。
 
 ## 核心討論重點與決議 (Key Points & Decisions)
 ${decisionBullets.join('\n')}
@@ -575,11 +620,18 @@ ${shownExcerpts.length > 0 ? shownExcerpts.join('\n') : `- ${summaryBadge} 詳�
 ${metaComment}
 `;
   const summaryPath = path.join(meetingDir, '02-summary.md');
+  const staleFiles = [];
   if (!fs.existsSync(summaryPath) || forceAll) {
     if (fs.existsSync(summaryPath) && forceAll) {
       saveSafeBackup(summaryPath, summaryMd);
     }
     fs.writeFileSync(summaryPath, summaryMd, 'utf8');
+  } else {
+    const existingSum = fs.readFileSync(summaryPath, 'utf8');
+    const sumHashMatch = existingSum.match(/transcript-sha256:\s*([0-9a-f]{8,64})/i);
+    if (sumHashMatch && sumHashMatch[1] !== transcriptSha256) {
+      staleFiles.push('02-summary.md');
+    }
   }
 
   // 7. Create 03-todos-and-discussion.md (extract real action items from transcript; preserved on --force unless --force-all is passed)
@@ -618,6 +670,12 @@ ${metaComment}
       saveSafeBackup(todosPath, todosMd);
     }
     fs.writeFileSync(todosPath, todosMd, 'utf8');
+  } else {
+    const existingTodos = fs.readFileSync(todosPath, 'utf8');
+    const todosHashMatch = existingTodos.match(/transcript-sha256:\s*([0-9a-f]{8,64})/i);
+    if (todosHashMatch && todosHashMatch[1] !== transcriptSha256) {
+      staleFiles.push('03-todos-and-discussion.md');
+    }
   }
 
   // 8. Ensure project-level index.md rolling snapshot exists and lists this meeting
@@ -665,6 +723,7 @@ ${metaComment}
     meetingDir,
     firstContentLine,
     transcriptTotalLines,
+    staleFiles,
     mediaMeta,
     mapped
   };
@@ -678,7 +737,8 @@ function generateDeliverableFromTemplate({
   meetingDir,
   templatePath,
   outputName = 'deliverable.md',
-  values = {}
+  values = {},
+  force = false
 } = {}) {
   if (!outputName || typeof outputName !== 'string' || !isSafePathSegment(outputName)) {
     return {
@@ -712,6 +772,18 @@ function generateDeliverableFromTemplate({
   const outPath = path.resolve(deliverablesDir, outputName);
   if (!isSubPath(deliverablesDir, outPath)) {
     return { ok: false, reason: 'invalid_output_name', error: 'Path traversal detected in outputName.' };
+  }
+
+  // BUG-002: Protect existing deliverable from accidental overwrite unless force: true (saving .bak backup)
+  if (fs.existsSync(outPath)) {
+    if (!force) {
+      return {
+        ok: false,
+        reason: 'deliverable_already_exists',
+        error: `Deliverable already exists at ${outPath}. Pass --force to overwrite (a .bak backup will be saved).`
+      };
+    }
+    saveSafeBackup(outPath, filledContent);
   }
 
   fs.writeFileSync(outPath, filledContent, 'utf8');

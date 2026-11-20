@@ -36,9 +36,9 @@ Standard Commands:
       in-place (including package.json, bin/, src/, scripts/, .github/workflows/publish.yml, and 5-language READMEs)
       and verifies npm pack readiness.
 
-  commit [target] [-m <msg>]
-      Runs verify -> updates project/index.md -> safe Git commit & remote sync (pull --no-rebase + push)
-      Safely stops on merge conflicts without stripping <<<<<<< markers; excludes sensitive files
+  commit [target] [-m <msg>] [--no-push]
+      Runs verify -> updates project/index.md -> safe Git commit & optional remote sync (pull --no-rebase + push; pass --no-push for local-only commit)
+      Safely stops on merge conflicts without stripping <<<<<<< markers; excludes sensitive files & *.bak backups
 
   pdf [file|dir|id] [--merge] [--output <file.pdf>]   (alias: md2pdf)
       0-Token Markdown to A4 PDF export via local Headless Chrome/Edge, wkhtmltopdf, or macOS cupsfilter
@@ -56,8 +56,8 @@ Standard Commands:
   inspect [meetingDir]
       Runs the 7-dimension Post-Creation Inspection Rule (returns non-zero if files/citations are missing or if 🚨 Human-in-the-Loop / ⚡ Cross-Meeting Conflicts require review)
 
-  deliverable --meeting <dir> --template <file> [--out <filename.md>] [--FIELD value]
-      Generates a post-meeting deliverable from a template into deliverables/, flagging any unmentioned fields with ⚠️ [會議未提及 - 需人工補填]
+  deliverable --meeting <dir> --template <file> [--out <filename.md>] [--FIELD value] [--force]
+      Generates a post-meeting deliverable from a template into deliverables/, flagging any unmentioned fields with ⚠️ [會議未提及 - 需人工補填] (refuses to overwrite existing file unless --force is passed, saving .bak backup)
 `);
 }
 
@@ -169,6 +169,9 @@ function main(argv = process.argv.slice(2)) {
         return 1;
       }
       console.log(`✅ Meeting created: ${res.meetingDir}`);
+      if (res.staleFiles && res.staleFiles.length > 0) {
+        console.warn(`⚠️ Warning: 01-transcript.md was updated, so downstream file(s) are now STALE and will be blocked by verify/inspect until synced: ${res.staleFiles.join(', ')} (or re-run with --force-all).`);
+      }
       return 0;
     }
     case 'inspect': {
@@ -197,7 +200,8 @@ function main(argv = process.argv.slice(2)) {
         meetingDir,
         templatePath,
         outputName: outName,
-        values: flags
+        values: flags,
+        force: Boolean(flags.force)
       });
       if (!res.ok) {
         console.error(`⛔ ${res.error}`);

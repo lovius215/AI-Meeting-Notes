@@ -234,13 +234,25 @@ function runCommit({ cwd = process.cwd(), target = null, flags = {} } = {}) {
   const shortHash = hashRes.stdout || 'HEAD';
   console.log(t(lang, 'commitSuccess', shortHash));
 
-  // 6. Check if remote is configured -> pull --no-rebase + push
+  // 6. Check if remote is configured -> pull --no-rebase + push (unless --no-push / --local is passed)
+  const skipRemoteSync = Boolean(flags['no-push'] || flags.local);
   const remotesRes = runGit(['remote'], cwd);
   const remotes = remotesRes.stdout ? remotesRes.stdout.split(/\r?\n/).filter(Boolean) : [];
+  if (remotes.length > 0 && skipRemoteSync) {
+    console.log('ℹ️ 已完成本機提交（已略過遠端 pull / push 同步：--no-push）。');
+    return {
+      ok: true,
+      committed: true,
+      pushed: false,
+      commitHash: shortHash,
+      excludedSensitive
+    };
+  }
   if (remotes.length > 0) {
     const remoteName = remotes.includes('origin') ? 'origin' : remotes[0];
     const branchRes = runGit(['rev-parse', '--abbrev-ref', 'HEAD'], cwd);
     const branchName = branchRes.stdout || 'main';
+    console.log(`🌐 正在同步遠端儲存庫 (${remoteName}/${branchName})（若僅需本機提交可加 --no-push）...`);
 
     const pullRes = runGit(['pull', '--no-rebase', remoteName, branchName], cwd);
     const postPullConflicts = findConflictFiles(cwd);

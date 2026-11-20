@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { readConfig } = require('./utils');
 const { t } = require('./i18n');
 
@@ -202,6 +203,30 @@ function verifyFile(filePath, cwd) {
     }
   }
 
+  // BUG-007: Enforce Stale Transcript Hash check on 02-summary.md & 03-todos-and-discussion.md
+  // so verify & commit actively block stale downstream files after 01-transcript.md is updated via --force!
+  const baseName = path.basename(filePath);
+  if (baseName === '02-summary.md' || baseName === '03-todos-and-discussion.md') {
+    const hashMatch = content.match(/transcript-sha256:\s*([0-9a-f]{8,64})/i);
+    const siblingTranscript = path.join(path.dirname(filePath), '01-transcript.md');
+    if (hashMatch && fs.existsSync(siblingTranscript)) {
+      const actualHash = crypto
+        .createHash('sha256')
+        .update(fs.readFileSync(siblingTranscript, 'utf8'))
+        .digest('hex')
+        .slice(0, hashMatch[1].length);
+      if (actualHash !== hashMatch[1]) {
+        issues.push({
+          type: 'stale_transcript',
+          file: relFile,
+          line: 1,
+          expectedHash: actualHash,
+          recordedHash: hashMatch[1]
+        });
+      }
+    }
+  }
+
   return issues;
 }
 
@@ -242,6 +267,8 @@ function runVerify({ cwd = process.cwd(), target = null, silent = false } = {}) 
         console.error('  - ' + t(lang, 'brokenRefFile', iss.file, iss.line, iss.ref));
       } else if (iss.type === 'broken_lines') {
         console.error('  - ' + t(lang, 'brokenRefLines', iss.file, iss.line, iss.ref, iss.maxLine));
+      } else if (iss.type === 'stale_transcript') {
+        console.error(`  - [逐字稿已更新 / Stale Hash] ${iss.file} 記錄之逐字稿指紋 (${iss.recordedHash}) 與現行 01-transcript.md (${iss.expectedHash}) 不符，請重新同步摘要與待辦或執行 --force-all。`);
       }
     }
   }
