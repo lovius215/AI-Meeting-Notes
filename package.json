@@ -1,18 +1,16 @@
 {
   "name": "@loviusc/ai-meeting-notes",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Zero-Dependency Conversational AI Agent Workbench (@loviusc/ai-meeting-notes) — Install via npm, initialize via 'meetnotes init', and chat in natural language with zero commands!",
   "keywords": [
-    "ai-agent",
-    "cli",
-    "workbench",
+    "ai-meeting-notes",
+    "meeting-notes",
+    "meeting-minutes",
+    "transcript",
+    "speaker-diarization",
+    "action-items",
     "zero-dependency",
-    "scaffold",
-    "skill",
-    "claude",
-    "gemini",
-    "cursor",
-    "antigravity"
+    "cli"
   ],
   "homepage": "https://github.com/lovius215/AI-Meeting-Notes#readme",
   "bugs": {

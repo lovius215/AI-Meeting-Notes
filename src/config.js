@@ -6,8 +6,8 @@
  */
 const PACKAGE_NAME = process.env.GENAITOOL_PACKAGE_NAME || '@loviusc/ai-meeting-notes';
 const CLI_NAME = process.env.GENAITOOL_CLI_NAME || 'meetnotes';
-const VERSION = '1.1.0';
-const GITHUB_REPO = 'https://github.com/loviusc/ai-meeting-notes';
+const VERSION = '1.2.0';
+const GITHUB_REPO = 'https://github.com/lovius215/AI-Meeting-Notes';
 
 const DEFAULT_LANG = 'zh-TW';
 const SUPPORTED_LANGS = ['zh-TW', 'zh-CN', 'en', 'ja', 'ko'];
